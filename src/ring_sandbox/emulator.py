@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Depends, FastAPI, Form, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -125,6 +126,29 @@ def create_app(world: World | None = None) -> FastAPI:
         return {"time": datetime.now(tz=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
 
     # ------------------------------------------------------------------ account
+
+    @app.post("/oauth/token")
+    async def token(
+        grant_type: str = Form(...),
+        refresh_token: str | None = Form(default=None),
+        client_id: str | None = Form(default=None),
+    ) -> dict[str, Any]:
+        """RFC 6749 refresh grant. Sandbox simplification: any well-formed refresh
+        token is accepted and the world rotates to the newly issued access token."""
+        del client_id  # accepted but unused in the sandbox
+        if grant_type != "refresh_token":
+            return _error(400, "unsupported_grant_type", "only refresh_token is supported")
+        if not refresh_token:
+            return _error(400, "invalid_request", "refresh_token is required")
+        if refresh_token == "invalid":
+            return _error(400, "invalid_grant", "refresh token rejected")
+        world.required_token = f"sandbox-{secrets.token_hex(8)}"
+        return {
+            "access_token": world.required_token,
+            "refresh_token": f"sandbox-refresh-{secrets.token_hex(8)}",
+            "token_type": "Bearer",
+            "expires_in": 14400,
+        }
 
     @app.get("/v1/users/me", dependencies=[Depends(auth)])
     async def me() -> dict[str, Any]:

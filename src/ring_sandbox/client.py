@@ -9,7 +9,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -33,6 +33,7 @@ from .models import (
 )
 
 PRODUCTION_BASE_URL = "https://api.amazonvision.com"
+DEFAULT_TOKEN_URL = "https://oauth.ring.com/oauth/token"
 _INCLUDABLE = ("status", "capabilities", "configurations", "location")
 
 
@@ -65,6 +66,10 @@ class RingClient:
         max_json_bytes: int = 1024 * 1024,
         max_redirects: int = 3,
         max_retry_delay: float = 30.0,
+        refresh_token: str | None = None,
+        token_url: str = DEFAULT_TOKEN_URL,
+        client_id: str | None = None,
+        on_token_refresh: Callable[[dict], None] | None = None,
     ):
         self._has_transport = transport is not None
         origin = _origin_url(base_url)
@@ -86,6 +91,17 @@ class RingClient:
             raise ValueError("invalid HTTP limits")
         if isinstance(media_origins, str):
             media_origins = (media_origins,)
+        token_origin = _origin_url(token_url)
+        if (
+            token_origin.scheme != "https"
+            and not transport
+            and token_origin.host not in ("127.0.0.1", "localhost", "::1")
+        ):
+            raise ValueError("token endpoint requires HTTPS, except an explicit local emulator")
+        self._refresh_token = refresh_token
+        self._token_url = token_url
+        self._client_id = client_id
+        self._on_token_refresh = on_token_refresh
         self._token = access_token
         self.base_url = base_url
         self._media_origins: set[tuple[str, str, int]] = set()
@@ -160,6 +176,53 @@ class RingClient:
             host == suffix or host.endswith("." + suffix) for suffix in self._media_suffixes
         )
 
+    # ------------------------------------------------------------------ auth
+
+    def refresh(self, refresh_token: str | None = None) -> dict:
+        """Exchange a refresh token for a new access token (RFC 6749 refresh grant).
+
+        The token endpoint shape is exercised against the local emulator; verify
+        against the official service before relying on it in production.
+        ``on_token_refresh`` receives the new token pair so callers can persist it.
+        """
+        token = refresh_token or self._refresh_token
+        if not token:
+            raise ValueError("no refresh token available")
+        form = {"grant_type": "refresh_token", "refresh_token": token}
+        if self._client_id:
+            form["client_id"] = self._client_id
+        resp = self._post_form(self._token_url, form)
+        if resp.status_code >= 400:
+            raise RingAPIError(resp.status_code, _parse_errors(resp), resp.text)
+        body = resp.json()
+        access = body.get("access_token")
+        if not isinstance(access, str) or not access:
+            raise ValueError("token response missing access_token")
+        self._token = access
+        if isinstance(body.get("refresh_token"), str) and body["refresh_token"]:
+            self._refresh_token = body["refresh_token"]
+        if self._on_token_refresh is not None:
+            self._on_token_refresh(
+                {
+                    "access_token": access,
+                    "refresh_token": self._refresh_token,
+                    "expires_in": body.get("expires_in"),
+                    "obtained_at": datetime.now(tz=UTC).isoformat(),
+                }
+            )
+        return body
+
+    def _post_form(self, url: str, data: dict[str, str]) -> httpx.Response:
+        request = self._http.build_request("POST", url, data=data)
+        resp = self._http.send(request, stream=True, follow_redirects=False, auth=None)
+        try:
+            content = _read_bounded(resp, self.max_json_bytes)
+            return httpx.Response(
+                resp.status_code, headers=resp.headers, content=content, request=request
+            )
+        finally:
+            resp.close()
+
     def _headers(self, **extra: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}", **extra}
 
@@ -171,9 +234,11 @@ class RingClient:
         url = httpx.URL(self.base_url).join(path)
         if _origin(url) != self._api_origin:
             raise ValueError("API origin cannot change after client construction")
-        headers = self._headers(**kwargs.pop("headers", {}))
+        extra_headers = kwargs.pop("headers", {})
+        headers = self._headers(**extra_headers)
         attempt = redirects = 0
         credentialed = True
+        refreshed = False
         while True:
             request = self._http.build_request(method, url, headers=headers, **kwargs)
             request.headers.pop("Cookie", None)
@@ -181,6 +246,16 @@ class RingClient:
                 request.headers.pop("Authorization", None)
             resp = self._http.send(request, stream=True, follow_redirects=False, auth=None)
             try:
+                if (
+                    resp.status_code == 401
+                    and credentialed
+                    and self._refresh_token
+                    and not refreshed
+                ):
+                    self.refresh()
+                    headers = self._headers(**extra_headers)
+                    refreshed = True
+                    continue
                 if resp.status_code in (301, 302, 303, 307, 308):
                     location = resp.headers.get("Location")
                     if not media or not location or redirects >= self.max_redirects:

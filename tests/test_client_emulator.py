@@ -37,6 +37,42 @@ def test_unauthorized(ring_transport):
     assert ei.value.status_code == 401
 
 
+def test_expired_token_refreshes_and_retries(ring_transport, ring_world: World):
+    ring_world.required_token = "current-token"
+    rotated = []
+    with RingClient(
+        "stale-token",
+        base_url="http://sandbox",
+        transport=ring_transport,
+        refresh_token="refresh-1",
+        token_url="http://sandbox/oauth/token",
+        on_token_refresh=rotated.append,
+    ) as client:
+        assert client.me().account_id == ring_world.account_id
+        assert client.access_token == ring_world.required_token != "stale-token"
+    assert rotated[0]["access_token"] == ring_world.required_token
+    assert rotated[0]["refresh_token"] and rotated[0]["expires_in"] == 14400
+
+
+def test_refresh_failure_surfaces_token_error(ring_transport, ring_world: World):
+    ring_world.required_token = "current-token"
+    with RingClient(
+        "stale-token",
+        base_url="http://sandbox",
+        transport=ring_transport,
+        refresh_token="invalid",
+        token_url="http://sandbox/oauth/token",
+    ) as client:
+        with pytest.raises(RingAPIError) as ei:
+            client.me()
+    assert ei.value.status_code == 400 and ei.value.code == "invalid_grant"
+
+
+def test_token_url_requires_https_or_explicit_transport():
+    with pytest.raises(ValueError):
+        RingClient("t", token_url="http://auth.example.test/oauth/token")
+
+
 def test_status_sensor_semantics(ring_client: RingClient, ring_control, ring_world: World):
     sensor = next(d for d in ring_world.devices.values() if d.kind == DeviceKind.CONTACT_SENSOR)
     st = ring_client.status(sensor.id)
