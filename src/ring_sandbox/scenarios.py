@@ -2,8 +2,12 @@
 
 A scenario is a list of steps with relative offsets. ``run`` posts each step to
 ``/_sandbox/events`` so history is written and webhooks are delivered exactly as they
-would be in production. ``speed`` compresses time (``speed=60`` plays a 90-minute
-visit in 90 seconds); ``backdate=True`` writes the whole scenario into the past instantly.
+would be in production.
+
+Event *timestamps* always come from a virtual clock that starts ``length + 60s`` in the past,
+so a 90-minute scenario produces events spanning 90 minutes that all sit before "now" (Ring
+media endpoints reject future timestamps). ``speed`` only controls pacing: ``speed=60`` sleeps
+1 real second per virtual minute; ``backdate=True`` (or ``speed=0``) sends everything at once.
 """
 
 from __future__ import annotations
@@ -116,27 +120,24 @@ def run(
 ) -> list[dict[str, Any]]:
     """Play ``scenario`` against a running emulator; returns the injected webhook payloads."""
     out: list[dict[str, Any]] = []
+    start = start or datetime.now(tz=UTC) - timedelta(seconds=scenario.length_s + 60)
+    pace = not backdate and speed > 0
     with httpx.Client(base_url=base_url, timeout=10.0) as http:
         state = http.get("/_sandbox/state").json()
-        if backdate:
-            start = start or datetime.now(tz=UTC) - timedelta(seconds=scenario.length_s + 60)
         t0 = time.monotonic()
         for step in sorted(scenario.steps, key=lambda s: s.offset_s):
+            if pace:
+                wait = step.offset_s / speed - (time.monotonic() - t0)
+                if wait > 0:
+                    time.sleep(wait)
             body: dict[str, Any] = {
                 "device_id": _resolve_device(state, step.device),
                 "type": step.type,
                 "sub_type": step.sub_type,
+                "at": (start + timedelta(seconds=step.offset_s)).isoformat(),
                 "duration_ms": step.duration_ms,
                 "deliver": deliver,
             }
-            if backdate:
-                assert start is not None
-                body["at"] = (start + timedelta(seconds=step.offset_s)).isoformat()
-            else:
-                target = step.offset_s / speed
-                wait = target - (time.monotonic() - t0)
-                if wait > 0:
-                    time.sleep(wait)
             resp = http.post("/_sandbox/events", json=body)
             resp.raise_for_status()
             out.append(resp.json()["webhook"])
