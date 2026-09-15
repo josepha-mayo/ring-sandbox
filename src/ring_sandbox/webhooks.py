@@ -27,12 +27,21 @@ def sign(signing_key: str, raw_body: bytes) -> str:
     return _PREFIX + digest
 
 
-def verify(signing_key: str, raw_body: bytes, received_signature: str | None) -> bool:
-    """Constant-time verification of a Ring webhook signature."""
+def verify(signing_key: str, raw_body: bytes, received_signature: str | bytes | None) -> bool:
+    """Constant-time verification of a Ring webhook signature.
+
+    Malformed input (missing, non-ASCII, wrong type) returns ``False`` rather than
+    raising, so callers can treat every bad signature uniformly.
+    """
     if not received_signature:
         return False
-    expected = sign(signing_key, raw_body)
-    return hmac.compare_digest(expected, received_signature.strip())
+    try:
+        received = received_signature.strip()
+        received_bytes = received.encode("ascii") if isinstance(received, str) else bytes(received)
+    except (AttributeError, TypeError, ValueError, UnicodeEncodeError):
+        return False
+    expected = sign(signing_key, raw_body).encode("ascii")
+    return hmac.compare_digest(expected, received_bytes)
 
 
 class SignatureError(ValueError):

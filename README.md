@@ -16,6 +16,9 @@ Ring ships no SDK and no local simulator. Testing a partner integration today me
 ```bash
 pip install "ring-sandbox[server]"      # client + emulator + CLI
 pip install ring-sandbox                # client only
+
+# development: pinned, CI-tested dependency set
+pip install -r requirements-dev.txt -e ".[dev]"
 ```
 
 ## Client
@@ -35,6 +38,12 @@ with RingClient(token) as ring:                       # production by default
     clip = ring.clip(cam.id, timestamp=some_datetime, duration_ms=10_000)
     if clip.partial: print("only", clip.actual_length_ms, "ms available")
 ```
+
+Media endpoints 303-redirect to a pre-signed URL on another host. Redirects are followed
+manually: bearer credentials and cookies are never forwarded, the response body is capped by
+`max_media_bytes`, and off-origin targets must be allowlisted — pass
+`media_origins=["https://media-host.example", "*.amazonaws.com"]` when talking to real Ring.
+JSON endpoints never follow redirects; device ids are treated as opaque single path segments.
 
 Point it at the emulator with `RingClient(token, base_url="http://127.0.0.1:8787")`.
 

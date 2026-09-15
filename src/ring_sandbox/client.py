@@ -6,10 +6,14 @@ Point ``base_url`` at ``https://api.amazonvision.com`` (default) or at a running
 
 from __future__ import annotations
 
+import ipaddress
+import math
 import time
 from collections.abc import Iterable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -37,8 +41,7 @@ class RingAPIError(Exception):
         self.status_code = status_code
         self.errors = errors
         self.body = body
-        detail = "; ".join(e.detail or e.title or e.code or "" for e in errors) or body[:200]
-        super().__init__(f"Ring API {status_code}: {detail}")
+        super().__init__(f"Ring API returned HTTP {status_code}")
 
     @property
     def code(self) -> str | None:
@@ -57,19 +60,80 @@ class RingClient:
         timeout: float = 30.0,
         max_retries: int = 3,
         transport: httpx.BaseTransport | None = None,
+        media_origins: Iterable[str] = (),
+        max_media_bytes: int = 20 * 1024 * 1024,
+        max_json_bytes: int = 1024 * 1024,
+        max_redirects: int = 3,
+        max_retry_delay: float = 30.0,
     ):
+        self._has_transport = transport is not None
+        origin = _origin_url(base_url)
+        self._check_api_origin(origin)
+        if (
+            type(max_retries) is not int
+            or not 0 <= max_retries <= 10
+            or type(max_redirects) is not int
+            or not 0 <= max_redirects <= 10
+            or type(max_media_bytes) is not int
+            or max_media_bytes <= 0
+            or type(max_json_bytes) is not int
+            or max_json_bytes <= 0
+            or not math.isfinite(max_retry_delay)
+            or max_retry_delay < 0
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
+            raise ValueError("invalid HTTP limits")
+        if isinstance(media_origins, str):
+            media_origins = (media_origins,)
         self._token = access_token
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url
+        self._media_origins: set[tuple[str, str, int]] = set()
+        self._media_suffixes: list[str] = []
+        for value in media_origins:
+            if value.startswith("*."):
+                suffix = value[2:].lower()
+                if not suffix or any(c in suffix for c in "/:@?#"):
+                    raise ValueError(f"invalid media origin pattern {value!r}")
+                self._media_suffixes.append(suffix)
+                continue
+            allowed = _origin_url(value)
+            if allowed.scheme != "https":
+                raise ValueError("off-origin media downloads require HTTPS")
+            self._media_origins.add(_origin(allowed))
         self.max_retries = max_retries
+        self.max_redirects = max_redirects
+        self.max_retry_delay = max_retry_delay
+        self.max_media_bytes, self.max_json_bytes = max_media_bytes, max_json_bytes
         self._http = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
-            follow_redirects=True,
+            follow_redirects=False,
             transport=transport,
-            headers={"Accept": "application/json"},
+            trust_env=False,
+            headers={"Accept": "application/json", "Accept-Encoding": "identity"},
         )
 
     # ----------------------------------------------------------------- plumbing
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
+    @base_url.setter
+    def base_url(self, value: str) -> None:
+        origin = _origin_url(value)
+        self._check_api_origin(origin)
+        self._base_url = str(origin).rstrip("/")
+        self._api_origin = _origin(origin)
+
+    def _check_api_origin(self, origin: httpx.URL) -> None:
+        if (
+            origin.scheme == "http"
+            and not self._has_transport
+            and origin.host not in ("127.0.0.1", "localhost", "::1")
+        ):
+            raise ValueError("API origin requires HTTPS, except an explicit local emulator")
 
     @property
     def access_token(self) -> str:
@@ -88,23 +152,86 @@ class RingClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
+    def _media_allowed(self, url: httpx.URL, origin: tuple[str, str, int]) -> bool:
+        if origin in self._media_origins:
+            return True
+        host = url.host.lower()
+        return url.port in (None, 443) and any(
+            host == suffix or host.endswith("." + suffix) for suffix in self._media_suffixes
+        )
+
     def _headers(self, **extra: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token}", **extra}
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        attempt = 0
+    def _request(
+        self, method: str, path: str, *, media: bool = False, **kwargs: Any
+    ) -> httpx.Response:
+        if not path.startswith("/") or path.startswith("//"):
+            raise ValueError("API requests require an origin-relative path")
+        url = httpx.URL(self.base_url).join(path)
+        if _origin(url) != self._api_origin:
+            raise ValueError("API origin cannot change after client construction")
+        headers = self._headers(**kwargs.pop("headers", {}))
+        attempt = redirects = 0
+        credentialed = True
         while True:
-            resp = self._http.request(
-                method, path, headers=self._headers(**kwargs.pop("headers", {})), **kwargs
-            )
-            if resp.status_code == 429 and attempt < self.max_retries:
-                delay = float(resp.headers.get("Retry-After", 2**attempt))
-                time.sleep(delay)
-                attempt += 1
-                continue
-            if resp.status_code >= 400:
-                raise RingAPIError(resp.status_code, _parse_errors(resp), resp.text)
-            return resp
+            request = self._http.build_request(method, url, headers=headers, **kwargs)
+            request.headers.pop("Cookie", None)
+            if not credentialed:
+                request.headers.pop("Authorization", None)
+            resp = self._http.send(request, stream=True, follow_redirects=False, auth=None)
+            try:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not media or not location or redirects >= self.max_redirects:
+                        raise ValueError("unexpected or excessive redirect")
+                    target = request.url.join(location)
+                    if target.scheme not in ("https", "http") or not target.host:
+                        raise ValueError("unsafe media redirect")
+                    if target.username or target.password or target.fragment:
+                        raise ValueError("unsafe media redirect")
+                    target_origin = _origin(target)
+                    if target_origin != self._api_origin:
+                        ip = _ip_literal(target.host)
+                        if (
+                            target.scheme != "https"
+                            or not self._media_allowed(target, target_origin)
+                            or (ip is not None and not ip.is_global)
+                        ):
+                            raise ValueError(
+                                f"media redirect origin {target.host!r} is not approved; "
+                                "allow it via media_origins"
+                            )
+                        if resp.status_code in (307, 308):
+                            raise ValueError("off-origin body-preserving redirect is not supported")
+                    if resp.status_code == 303 or (
+                        resp.status_code in (301, 302) and method == "POST"
+                    ):
+                        method, kwargs = "GET", {}
+                        headers.pop("Content-Type", None)
+                    else:
+                        kwargs.pop("params", None)
+                    credentialed = target_origin == self._api_origin
+                    url = target
+                    redirects += 1
+                    continue
+                if resp.status_code == 429 and attempt < self.max_retries:
+                    delay = _retry_delay(resp.headers.get("Retry-After"), attempt)
+                    if delay <= self.max_retry_delay:
+                        resp.close()
+                        time.sleep(delay)
+                        attempt += 1
+                        continue
+                limit = self.max_media_bytes if media and resp.is_success else self.max_json_bytes
+                content = _read_bounded(resp, limit)
+                result = httpx.Response(
+                    resp.status_code, headers=resp.headers, content=content, request=request
+                )
+                if result.status_code >= 400:
+                    raise RingAPIError(result.status_code, _parse_errors(result), result.text)
+                return result
+            finally:
+                resp.close()
 
     def _get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._request("GET", path, params=params).json()
@@ -126,23 +253,27 @@ class RingClient:
         return _bundle(doc)
 
     def device(self, device_id: str) -> Device:
-        return Device.model_validate(self._get_json(f"/v1/devices/{device_id}")["data"])
+        return Device.model_validate(self._get_json(f"/v1/devices/{_path_id(device_id)}")["data"])
 
     def status(self, device_id: str) -> Status:
-        return Status.model_validate(self._get_json(f"/v1/devices/{device_id}/status")["data"])
+        return Status.model_validate(
+            self._get_json(f"/v1/devices/{_path_id(device_id)}/status")["data"]
+        )
 
     def capabilities(self, device_id: str, component_id: str | None = None) -> Capabilities:
         params = {"component_id": component_id} if component_id else None
-        doc = self._get_json(f"/v1/devices/{device_id}/capabilities", params=params)
+        doc = self._get_json(f"/v1/devices/{_path_id(device_id)}/capabilities", params=params)
         return Capabilities.model_validate(doc["data"])
 
     def configurations(self, device_id: str, component_id: str | None = None) -> Configurations:
         params = {"component_id": component_id} if component_id else None
-        doc = self._get_json(f"/v1/devices/{device_id}/configurations", params=params)
+        doc = self._get_json(f"/v1/devices/{_path_id(device_id)}/configurations", params=params)
         return Configurations.model_validate(doc["data"])
 
     def location(self, device_id: str) -> Location:
-        return Location.model_validate(self._get_json(f"/v1/devices/{device_id}/location")["data"])
+        return Location.model_validate(
+            self._get_json(f"/v1/devices/{_path_id(device_id)}/location")["data"]
+        )
 
     # ----------------------------------------------------------------- history
 
@@ -158,7 +289,9 @@ class RingClient:
             params["event_types"] = ",".join(event_types)
         if page_key:
             params["page[key]"] = page_key
-        doc = self._get_json(f"/v1/history/devices/{device_id}/events", params=params or None)
+        doc = self._get_json(
+            f"/v1/history/devices/{_path_id(device_id)}/events", params=params or None
+        )
         return HistoryPage.model_validate(doc)
 
     def events(
@@ -174,6 +307,8 @@ class RingClient:
         Stops early once events are older than ``since`` (history is newest-first).
         """
         event_types = tuple(event_types) if event_types else None
+        if type(max_pages) is not int or max_pages <= 0:
+            raise ValueError("max_pages must be a positive int")
         page_key: str | None = None
         since_ms = int(since.timestamp() * 1000) if since else None
         for _ in range(max_pages):
@@ -228,16 +363,22 @@ class RingClient:
         height: int | None,
         component_id: str | None,
     ) -> Snapshot:
+        if type(fmt) is not str or not fmt:
+            raise ValueError("fmt must be a non-empty string")
         opts: dict[str, Any] = {"format": fmt}
-        if width or height:
-            opts["resolution"] = {"width": width, "height": height}
+        resolution = _resolution(width, height)
+        if resolution:
+            opts["resolution"] = resolution
         body["image_options"] = opts
         if component_id:
+            if type(component_id) is not str:
+                raise ValueError("component_id must be a string")
             body["components"] = [{"component_id": component_id}]
         resp = self._request(
             "POST",
-            f"/v1/devices/{device_id}/media/image/download",
+            f"/v1/devices/{_path_id(device_id)}/media/image/download",
             json=body,
+            media=True,
             headers={"Content-Type": "application/json", "Accept": "*/*"},
         )
         ts = resp.headers.get("X-Media-Timestamp")
@@ -261,16 +402,23 @@ class RingClient:
         component_id: str | None = None,
     ) -> MediaClip:
         """Download an existing recording. Does NOT trigger recording; expect 416 if idle."""
-        if duration_ms > 900_000:
-            raise ValueError("duration_ms must be <= 900000 (15 minutes)")
+        if type(duration_ms) is not int or not 0 < duration_ms <= 900_000:
+            raise ValueError("duration_ms must be an int in (0, 900000] (15 minutes)")
+        if codec is not None and (type(codec) is not str or not codec):
+            raise ValueError("codec must be a non-empty string")
+        if frame_rate is not None and (type(frame_rate) is not int or frame_rate <= 0):
+            raise ValueError("frame_rate must be a positive int")
+        if component_id is not None and (type(component_id) is not str or not component_id):
+            raise ValueError("component_id must be a non-empty string")
         body: dict[str, Any] = {"timestamp": _ms(timestamp), "duration": duration_ms}
         video: dict[str, Any] = {}
         if codec:
             video["codec"] = codec
         if frame_rate:
             video["frame_rate"] = frame_rate
-        if width or height:
-            video["resolution"] = {"width": width, "height": height}
+        resolution = _resolution(width, height)
+        if resolution:
+            video["resolution"] = resolution
         if video:
             body["video_options"] = video
         if audio:
@@ -279,8 +427,9 @@ class RingClient:
             body["components"] = [{"component_id": component_id}]
         resp = self._request(
             "POST",
-            f"/v1/devices/{device_id}/media/video/download",
+            f"/v1/devices/{_path_id(device_id)}/media/video/download",
             json=body,
+            media=True,
             headers={"Content-Type": "application/json", "Accept": "*/*"},
         )
         ts = resp.headers.get("X-Media-Timestamp")
@@ -297,9 +446,11 @@ class RingClient:
 
     def chime_play(self, device_id: str, slot_event: str) -> dict[str, Any]:
         """Play one of the app's audio slots (e.g. ``ring-appstore-event-1``) on a chime."""
+        if type(slot_event) is not str or not slot_event:
+            raise ValueError("slot_event must be a non-empty string")
         resp = self._request(
             "POST",
-            f"/v1/devices/{device_id}/media/audio/playback",
+            f"/v1/devices/{_path_id(device_id)}/media/audio/playback",
             json={"event": slot_event},
             headers={"Content-Type": "application/json"},
         )
@@ -309,8 +460,87 @@ class RingClient:
 # --------------------------------------------------------------------------- helpers
 
 
+def _path_id(value: str) -> str:
+    """Encode an opaque resource id for use as exactly one path segment."""
+    if type(value) is not str or not value:
+        raise ValueError("id must be a non-empty string")
+    return quote(value, safe="")
+
+
+def _origin_url(value: str) -> httpx.URL:
+    try:
+        url = httpx.URL(value)
+    except Exception as exc:
+        raise ValueError(f"invalid URL {value!r}") from exc
+    if url.scheme not in ("https", "http") or not url.host:
+        raise ValueError(f"invalid URL {value!r}")
+    if url.username or url.password:
+        raise ValueError("credentials are not allowed in URLs")
+    return url
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int]:
+    scheme = url.scheme.lower()
+    port = url.port or (443 if scheme == "https" else 80)
+    return (scheme, url.host.lower(), port)
+
+
+def _ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return None
+
+
+def _retry_delay(header: str | None, attempt: int) -> float:
+    delay: float | None = None
+    if header:
+        try:
+            delay = float(header)
+        except ValueError:
+            try:
+                delay = (parsedate_to_datetime(header) - datetime.now(tz=UTC)).total_seconds()
+            except Exception:
+                delay = None
+    if delay is None or not math.isfinite(delay) or delay < 0:
+        delay = 2.0**attempt
+    return delay
+
+
+def _read_bounded(resp: httpx.Response, limit: int) -> bytes:
+    """Read a response body, aborting the stream as soon as it exceeds ``limit``."""
+    try:
+        declared = int(resp.headers.get("Content-Length", ""))
+    except ValueError:
+        declared = -1
+    if declared > limit:
+        raise ValueError(f"response exceeds the {limit}-byte limit")
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in resp.iter_bytes():
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(f"response exceeds the {limit}-byte limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _ms(value: datetime | int) -> int:
-    return value if isinstance(value, int) else int(value.timestamp() * 1000)
+    if type(value) is int:
+        if value < 0:
+            raise ValueError("timestamp must not be negative")
+        return value
+    if isinstance(value, datetime) and value.tzinfo is not None and value.utcoffset() is not None:
+        return int(value.timestamp() * 1000)
+    raise ValueError("timestamp must be epoch milliseconds or a timezone-aware datetime")
+
+
+def _resolution(width: int | None, height: int | None) -> dict[str, int] | None:
+    if width is None and height is None:
+        return None
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        raise ValueError("width and height must both be positive ints")
+    return {"width": width, "height": height}
 
 
 def _parse_errors(resp: httpx.Response) -> list[APIError]:
