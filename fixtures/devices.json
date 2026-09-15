@@ -1,0 +1,181 @@
+{
+  "data": [
+    {
+      "type": "devices",
+      "id": "ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O",
+      "attributes": {
+        "image_url": "https://app-content.ring.com/shared/images/devices/square_device_images/DoorbellPro/rvdp_3x.png",
+        "name": "Playground Device"
+      },
+      "relationships": {
+        "status": {
+          "data": {
+            "type": "device-status",
+            "id": "ava1.ring.device.status.Z5SWOVK22ZKGIZKCL5YW2OUB7F2ETAFR3P4GHTGYQWR5AFQYDLRIBCUTVXQIJSFDBI52BU3BQYL6SLQRX4P7RRIAN3MKIDLQ"
+          },
+          "links": {
+            "related": "/v1/devices/ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O/status"
+          }
+        },
+        "location": {
+          "data": {
+            "type": "locations",
+            "id": "ava1.ring.location.NWMCX4YY3NA25FEBNT2AYFEECHDPUBMR4DGXTMDPOGVGD2YLTIIH5FQ5TJYHQP3Q7HOQQT3ZXBVN4XGUAKEXOOHCM37KE7I64AA57ELYP5D5XDQA7C5E3IP3CA"
+          },
+          "links": {
+            "related": "/v1/devices/ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O/location"
+          }
+        },
+        "capabilities": {
+          "data": {
+            "type": "device-capabilities",
+            "id": "ava1.ring.device.capabilities.7PI6SEHHABUDBWLTRS57HDZF3C63I4ME52HJSU6MIKXTQCOQ53GYOJ6PVJV6H7D6RADKFULI5BY3CC4II6YT3K7WW2GJIRUU"
+          },
+          "links": {
+            "related": "/v1/devices/ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O/capabilities"
+          }
+        },
+        "configurations": {
+          "data": {
+            "type": "device-configurations",
+            "id": "ava1.ring.device.configurations.WIEQVPAOOPWTGREOVHSMBTMTNVZWYEEBST6L6WALDEVA3J3M5B76TL4MH227OT47326BK3WJASCCIWFX3RTSHMFJ7H3I52Y4ZQYXRVXADUL4PTT6NYF2H7DXHU"
+          },
+          "links": {
+            "related": "/v1/devices/ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O/configurations"
+          }
+        }
+      }
+    }
+  ],
+  "included": [
+    {
+      "type": "locations",
+      "id": "ava1.ring.location.NWMCX4YY3NA25FEBNT2AYFEECHDPUBMR4DGXTMDPOGVGD2YLTIIH5FQ5TJYHQP3Q7HOQQT3ZXBVN4XGUAKEXOOHCM37KE7I64AA57ELYP5D5XDQA7C5E3IP3CA",
+      "attributes": {
+        "state": "CA",
+        "country": "US"
+      }
+    },
+    {
+      "type": "device-status",
+      "id": "ava1.ring.device.status.Z5SWOVK22ZKGIZKCL5YW2OUB7F2ETAFR3P4GHTGYQWR5AFQYDLRIBCUTVXQIJSFDBI52BU3BQYL6SLQRX4P7RRIAN3MKIDLQ",
+      "attributes": {
+        "audio": {
+          "snooze": {
+            "active": null,
+            "until": null
+          }
+        },
+        "online": true,
+        "reported_at": "2026-09-15T12:45:03Z",
+        "state": null
+      }
+    },
+    {
+      "type": "device-capabilities",
+      "id": "ava1.ring.device.capabilities.7PI6SEHHABUDBWLTRS57HDZF3C63I4ME52HJSU6MIKXTQCOQ53GYOJ6PVJV6H7D6RADKFULI5BY3CC4II6YT3K7WW2GJIRUU",
+      "attributes": {
+        "video": {
+          "configurations": [
+            "resolution_mode"
+          ],
+          "codecs": [
+            "AVC"
+          ],
+          "ratio": "16:9",
+          "max_resolution": 1080,
+          "supported_resolutions": [
+            1080
+          ]
+        },
+        "audio": {
+          "customizable_slots": null,
+          "supported_actions": null
+        },
+        "image_enhancements": {
+          "configurations": [
+            "color_night_vision",
+            "privacy_zones",
+            "snapshot"
+          ]
+        },
+        "flood_detection": null,
+        "tamper_detection": null,
+        "glass_break_detection": null,
+        "motion_detection": {
+          "configurations": [
+            "enabled",
+            "motion_zones"
+          ]
+        },
+        "smoke_detection": null,
+        "freeze_detection": null,
+        "co_detection_listener": null,
+        "battery_status": null,
+        "contact_detection": null
+      }
+    },
+    {
+      "type": "device-configurations",
+      "id": "ava1.ring.device.configurations.WIEQVPAOOPWTGREOVHSMBTMTNVZWYEEBST6L6WALDEVA3J3M5B76TL4MH227OT47326BK3WJASCCIWFX3RTSHMFJ7H3I52Y4ZQYXRVXADUL4PTT6NYF2H7DXHU",
+      "attributes": {
+        "motion_detection": {
+          "enabled": "on",
+          "motion_zones": [
+            {
+              "id": "bac09fbb-7a79-4eca-80d8-4e05a4ea8d07",
+              "vertices": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 0.5,
+                  "y": 0
+                },
+                {
+                  "x": 1,
+                  "y": 0
+                },
+                {
+                  "x": 1,
+                  "y": 0.6
+                },
+                {
+                  "x": 1,
+                  "y": 1
+                },
+                {
+                  "x": 0.5,
+                  "y": 1
+                },
+                {
+                  "x": 0,
+                  "y": 1
+                },
+                {
+                  "x": 0,
+                  "y": 0.6
+                }
+              ]
+            }
+          ]
+        },
+        "audio": {
+          "customizable_slots": null,
+          "volume": 11
+        },
+        "image_enhancements": {
+          "color_night_vision": "off",
+          "hdr": "off",
+          "ir_led_night_vision": "off",
+          "auto_zoom_track": "off",
+          "privacy_zones": []
+        }
+      }
+    }
+  ],
+  "meta": {
+    "time": "2026-09-15T12:47:12Z"
+  }
+}

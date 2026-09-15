@@ -78,6 +78,16 @@ BUILTIN: dict[str, Scenario] = {
             Step(12 * 60 + 14, "motion_detected", "human"),
         ],
     ),
+    "camera_only_visit": Scenario(
+        "camera_only_visit",
+        "Same aide visit seen only by the doorbell camera (no contact sensor bound).",
+        [
+            Step(0, "motion_detected", "human"),
+            Step(6, "button_press"),
+            Step(45 * 60, "motion_detected", "human"),  # steps out to the car mid-visit
+            Step(90 * 60, "motion_detected", "human"),  # leaves
+        ],
+    ),
     "no_show": Scenario(
         "no_show",
         "Only a vehicle passes; nobody comes to the door.",

@@ -8,5 +8,4 @@ build/
 .ruff_cache/
 .env
 .env.*
-fixtures/*.json
-!fixtures/README.md
+fixtures/me.json
