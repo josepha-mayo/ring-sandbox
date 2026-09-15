@@ -95,8 +95,9 @@ class ConfigurableCapability(_Model):
 
 
 class AudioCapabilities(_Model):
+    # Real cameras report both as null (observed on the Playground doorbell), not absent.
     customizable_slots: int | None = None
-    supported_actions: list[str] = Field(default_factory=list)
+    supported_actions: list[str] | None = None
 
 
 class ComponentItem(_Model):
@@ -134,7 +135,7 @@ class Capabilities(_Model):
     @property
     def is_chime(self) -> bool:
         a = self.attributes.audio
-        return bool(a and "chime.play" in a.supported_actions)
+        return bool(a and a.supported_actions and "chime.play" in a.supported_actions)
 
     @property
     def is_multi_camera(self) -> bool:
