@@ -354,10 +354,32 @@ class World:
         dev.history.sort(key=lambda r: r.start, reverse=True)
         return rec
 
+    def record_on_demand(
+        self, device_id: str, at_ms: int | None = None, duration_ms: int = 30_000
+    ) -> HistoryRecord:
+        """Append an ``on_demand`` history record. The real API creates one whenever
+        media is requested from a camera (snapshot/clip downloads, live views, and
+        Playground event triggers all surface this way)."""
+        dev = self.devices[device_id]
+        at_ms = at_ms or now_ms()
+        rec = HistoryRecord(
+            id=f"{device_id}.on_demand.{at_ms}",
+            event_type="on_demand",
+            sub_type=None,
+            start=at_ms,
+            end=at_ms + duration_ms,
+            reviewed=True,
+        )
+        dev.history.append(rec)
+        dev.history.sort(key=lambda r: r.start, reverse=True)
+        return rec
+
     def recording_covering(self, device_id: str, ts_ms: int) -> HistoryRecord | None:
         dev = self.devices[device_id]
         for rec in dev.history:
-            if rec.start <= ts_ms <= rec.end:
+            # on_demand entries mark a media request, not an event recording — they
+            # don't extend clip coverage.
+            if rec.event_type != "on_demand" and rec.start <= ts_ms <= rec.end:
                 return rec
         return None
 

@@ -1,0 +1,82 @@
+{
+    "data":  [
+                 {
+                     "type":  "history-events",
+                     "id":  "ava1.ring.history.event.UXFXXMWG7DWH6LDFWPFXYIQBI44CAVBCCDYBLVIVDM7HTYZFXCQNMH7KLLV576W45STYFTVFR2N52GLPDXPBSHXDY5BPWXNW",
+                     "attributes":  {
+                                        "end":  1789513653550,
+                                        "start":  1789513622925,
+                                        "event_type":  "on_demand",
+                                        "is_third_party_reviewed":  true
+                                    },
+                     "relationships":  {
+                                           "cv_detections":  {
+                                                                 "data":  [
+
+                                                                          ]
+                                                             },
+                                           "source":  {
+                                                          "data":  {
+                                                                       "type":  "devices",
+                                                                       "id":  "ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O"
+                                                                   }
+                                                      }
+                                       },
+                     "meta":  {
+                                  "riid":  null
+                              }
+                 },
+                 {
+                     "type":  "history-events",
+                     "id":  "ava1.ring.history.event.BQELIP575LVDRSUYMOCCATGTVS4K224BPMN6IAQLII7FI4JAHG7EVHZIDKP2TO3SYM6G2ERI22GEKTD45MHP6VYGWHQVLBZH",
+                     "attributes":  {
+                                        "is_third_party_reviewed":  true,
+                                        "event_type":  "on_demand",
+                                        "start":  1789513578468,
+                                        "end":  1789513602247
+                                    },
+                     "relationships":  {
+                                           "cv_detections":  {
+                                                                 "data":  [
+
+                                                                          ]
+                                                             },
+                                           "source":  {
+                                                          "data":  {
+                                                                       "type":  "devices",
+                                                                       "id":  "ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O"
+                                                                   }
+                                                      }
+                                       },
+                     "meta":  {
+                                  "riid":  null
+                              }
+                 },
+                 {
+                     "type":  "history-events",
+                     "id":  "ava1.ring.history.event.PXKHVTAK6XVVC7Q36FW2CSPBBBPAWNBN2EY65SCKG6XA7FS7WQ34UOPWHF3AKKGTOWLDDHGVEUJAGFXZXP56JWUWLVIPDRG4",
+                     "attributes":  {
+                                        "end":  1789513530912,
+                                        "is_third_party_reviewed":  true,
+                                        "event_type":  "on_demand",
+                                        "start":  1789513511742
+                                    },
+                     "relationships":  {
+                                           "cv_detections":  {
+                                                                 "data":  [
+
+                                                                          ]
+                                                             },
+                                           "source":  {
+                                                          "data":  {
+                                                                       "type":  "devices",
+                                                                       "id":  "ava1.ring.device.DCT27DEDP2FDDRTDVIE62YYMBEDQN3NX5BIT44JHC2J6KXZG3J4NZE7LXTU67NPGY7NJ6I3AWQS3532PMPUZ3QCFJDXNDR6O"
+                                                                   }
+                                                      }
+                                       },
+                     "meta":  {
+                                  "riid":  null
+                              }
+                 }
+             ]
+}

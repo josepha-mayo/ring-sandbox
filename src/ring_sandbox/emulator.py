@@ -258,7 +258,9 @@ def create_app(world: World | None = None) -> FastAPI:
             return _error(400, "bad_request", "type must be at_timestamp or latest_in_range")
         if ts > now_ms() + 1000:
             return _error(400, "bad_request", "timestamp must be <= now")
+        world.record_on_demand(device_id, ts)
         fmt = body.image_options.get("format", "jpeg")
+        world.record_on_demand(device_id, ts)  # real API logs an on_demand history entry
         # Real API 303-redirects to a pre-signed URL; emulate that so clients exercise redirects.
         return Response(
             status_code=303, headers={"Location": f"/_sandbox/media/image/{device_id}/{ts}/{fmt}"}
@@ -286,6 +288,7 @@ def create_app(world: World | None = None) -> FastAPI:
         if rec is None:
             return _error(416, "TIMESTAMP_NOT_FOUND", "no recording at requested timestamp")
         rec.reviewed = True
+        world.record_on_demand(device_id, body.timestamp)
         available = rec.end - body.timestamp
         partial = available < body.duration
         headers = {"X-Media-Timestamp": str(body.timestamp)}

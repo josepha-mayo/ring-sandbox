@@ -149,9 +149,12 @@ def test_snapshot_and_clip(ring_client: RingClient, ring_control, ring_world: Wo
         ring_client.clip(cam.id, at - timedelta(hours=1), 5_000)
     assert ei.value.status_code == 416 and ei.value.code == "TIMESTAMP_NOT_FOUND"
 
-    # media access flips is_third_party_reviewed
-    ev = next(ring_client.events(cam.id))
-    assert ev.attributes.is_third_party_reviewed is True
+    # media access flips is_third_party_reviewed on the covered event, and like the real
+    # API it writes a fresh on_demand history entry for the media request itself
+    history = list(ring_client.events(cam.id))
+    assert history[0].attributes.event_type == "on_demand"
+    motion = next(e for e in history if e.attributes.event_type == "motion")
+    assert motion.attributes.is_third_party_reviewed is True
 
 
 def test_chime_playback(ring_client: RingClient, ring_world: World):
