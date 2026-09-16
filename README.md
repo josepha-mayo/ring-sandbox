@@ -54,8 +54,11 @@ ring-sandbox serve --port 8787
 ring-sandbox webhook http://localhost:8000/webhooks/ring --key my-hmac-key
 ring-sandbox play delivery --speed 5           # courier: vehicle -> human -> ding -> package -> vehicle
 ring-sandbox play home_aide_visit --backdate   # 90-minute visit written straight into history
+ring-sandbox play examples/late_arrival.yml    # your own scenario: name, description, steps
 ring-sandbox inject --type motion_detected --sub-type human
 ```
+
+Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. See `examples/late_arrival.yml` for a documented file.
 
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 
