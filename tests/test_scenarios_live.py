@@ -103,3 +103,18 @@ def test_backdated_visit_lands_in_history(stack):
         span_s = (hist[0].attributes.start - hist[-1].attributes.start) / 1000
         assert 90 * 60 <= span_s <= 90 * 60 + 30
         assert sensor.status.attributes.contact_detection.faulted is False  # door closed at the end
+
+
+def test_shipped_examples_parse_and_sort():
+    """Every example YAML in the repo is a valid scenario — they ship as docs."""
+    from pathlib import Path
+
+    from ring_sandbox.scenarios import load_yaml
+
+    examples = sorted(Path(__file__).resolve().parent.parent.glob("examples/*.yml"))
+    assert len(examples) >= 3
+    for path in examples:
+        scenario = load_yaml(str(path))
+        assert scenario.name == path.stem
+        assert scenario.steps, path
+        assert all(s.offset_s >= 0 for s in scenario.steps)

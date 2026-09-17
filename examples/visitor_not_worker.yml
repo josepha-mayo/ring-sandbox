@@ -1,0 +1,31 @@
+# Custom scenario for `ring-sandbox play` / `attest replay`.
+#
+# Doorstep activity during the aide's scheduled window — but it's a courier:
+# package motion, a quick doorbell press, no door cycle. The record should show
+# observed activity without implying the scheduled worker arrived.
+# Field reference (see ring_sandbox.scenarios.Step):
+#   offset_s    seconds after the scenario's simulated start
+#   type        webhook event type: motion_detected | button_press |
+#               contact_sensor_faulted | contact_sensor_cleared |
+#               device_offline | device_online
+#   sub_type    motion hint: human | vehicle | package (optional)
+#   device      device id or name; omit for the default doorbell (optional)
+#   duration_ms event duration in milliseconds (optional)
+
+name: visitor_not_worker
+description: Courier activity in the aide's window — observed, but not the scheduled worker.
+steps:
+  - offset_s: 600     # 10 min into the window a vehicle pulls up
+    type: motion_detected
+    sub_type: vehicle
+  - offset_s: 620
+    type: motion_detected
+    sub_type: human
+  - offset_s: 630
+    type: button_press
+  - offset_s: 640
+    type: motion_detected
+    sub_type: package
+  - offset_s: 660
+    type: motion_detected
+    sub_type: vehicle

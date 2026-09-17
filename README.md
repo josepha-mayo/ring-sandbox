@@ -58,7 +58,7 @@ ring-sandbox play examples/late_arrival.yml    # your own scenario: name, descri
 ring-sandbox inject --type motion_detected --sub-type human
 ```
 
-Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. See `examples/late_arrival.yml` for a documented file.
+Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. See `examples/` for documented files: `late_arrival.yml` (aide shows 25 min late), `partial_blackout.yml` (camera dies mid-visit — departure unobserved), `visitor_not_worker.yml` (courier activity in the aide's window).
 
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 
