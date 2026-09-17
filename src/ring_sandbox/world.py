@@ -277,6 +277,40 @@ class WebhookTarget:
 
 
 @dataclass
+class Chaos:
+    """Fault-injection profile: probabilities applied to webhook delivery and
+    flaky endpoints. ``seed`` makes the fault stream deterministic so chaos
+    runs are reproducible in tests."""
+
+    seed: int = 0
+    duplicate: float = 0.0
+    drop: float = 0.0
+    delay_ms: int = 0
+    jitter_ms: int = 0
+    flaky_media: float = 0.0
+    flaky_history: float = 0.0
+
+    def rng(self):
+        import random
+
+        return random.Random(self.seed)
+
+
+CHAOS_PRESETS: dict[str, Chaos] = {
+    "delivery": Chaos(duplicate=0.25, drop=0.10, delay_ms=300, jitter_ms=1500),
+    "flaky": Chaos(flaky_media=0.30, flaky_history=0.20),
+    "storm": Chaos(
+        duplicate=0.30,
+        drop=0.15,
+        delay_ms=300,
+        jitter_ms=2000,
+        flaky_media=0.20,
+        flaky_history=0.20,
+    ),
+}
+
+
+@dataclass
 class World:
     devices: dict[str, SandboxDevice] = field(default_factory=dict)
     webhooks: list[WebhookTarget] = field(default_factory=list)

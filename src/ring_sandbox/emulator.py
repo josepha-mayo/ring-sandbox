@@ -7,6 +7,7 @@ Data-plane routes mirror the documented Ring Partner API. Control-plane routes l
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import secrets
 from datetime import UTC, datetime
@@ -18,7 +19,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import webhooks
-from .world import DeviceKind, SandboxDevice, WebhookTarget, World, default_world, now_ms
+from .world import (
+    Chaos,
+    DeviceKind,
+    SandboxDevice,
+    WebhookTarget,
+    World,
+    default_world,
+    now_ms,
+)
 
 log = logging.getLogger("ring_sandbox")
 
@@ -94,10 +103,18 @@ class DeviceIn(BaseModel):
     components: list[str] = Field(default_factory=list)
 
 
-def create_app(world: World | None = None) -> FastAPI:
+def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAPI:
     world = world or default_world()
+    chaos = dataclasses.replace(chaos) if chaos else None
     app = FastAPI(title="ring-sandbox", version="0.1.0", docs_url="/_sandbox/docs")
     app.state.world = world
+    app.state.chaos = chaos
+    rng = chaos.rng() if chaos else None
+
+    def _flaky(rate: float) -> JSONResponse | None:
+        if rng and rate and rng.random() < rate:
+            return _error(500, "chaos", "chaos-injected transient failure — retry")
+        return None
 
     # ------------------------------------------------------------------ auth
 
@@ -214,6 +231,8 @@ def create_app(world: World | None = None) -> FastAPI:
     async def history(
         request: Request, device_id: str, event_types: str | None = None
     ) -> dict[str, Any]:
+        if chaos and (fail := _flaky(chaos.flaky_history)):
+            return fail  # type: ignore[return-value]
         dev = device_or_404(device_id)
         page_key = request.query_params.get("page[key]")
         filters = [f.strip() for f in event_types.split(",")] if event_types else []
@@ -237,6 +256,8 @@ def create_app(world: World | None = None) -> FastAPI:
 
     @app.post("/v1/devices/{device_id}/media/image/download", dependencies=[Depends(auth)])
     async def image_download(device_id: str, body: ImageRequest) -> Response:
+        if chaos and (fail := _flaky(chaos.flaky_media)):
+            return fail
         dev = device_or_404(device_id)
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
@@ -277,6 +298,8 @@ def create_app(world: World | None = None) -> FastAPI:
 
     @app.post("/v1/devices/{device_id}/media/video/download", dependencies=[Depends(auth)])
     async def video_download(device_id: str, body: VideoRequest) -> Response:
+        if chaos and (fail := _flaky(chaos.flaky_media)):
+            return fail
         dev = device_or_404(device_id)
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
@@ -321,33 +344,60 @@ def create_app(world: World | None = None) -> FastAPI:
 
     async def deliver(payload: dict[str, Any]) -> None:
         body = webhooks.encode(payload)
+        rid = payload["meta"]["request_id"]
         async with httpx.AsyncClient(timeout=5.0) as client:
             for target in list(world.webhooks):
-                headers = {
-                    "Content-Type": "application/json",
-                    webhooks.SIGNATURE_HEADER: webhooks.sign(target.signing_key, body),
-                }
-                try:
-                    resp = await client.post(target.url, content=body, headers=headers)
+                if rng and chaos.drop and rng.random() < chaos.drop:
+                    world.delivered.append(
+                        {"kind": "webhook.dropped", "url": target.url, "request_id": rid}
+                    )
+                    continue
+                delay = (chaos.delay_ms + rng.randint(0, chaos.jitter_ms)) / 1000 if rng else 0
+                if delay:
                     world.delivered.append(
                         {
-                            "kind": "webhook",
+                            "kind": "webhook.delayed",
                             "url": target.url,
-                            "status": resp.status_code,
-                            "request_id": payload["meta"]["request_id"],
+                            "request_id": rid,
+                            "ms": int(delay * 1000),
                         }
                     )
-                except httpx.HTTPError as exc:
-                    log.warning("webhook delivery to %s failed: %s", target.url, exc)
-                    world.delivered.append(
-                        {
-                            "kind": "webhook",
-                            "url": target.url,
-                            "status": None,
-                            "error": str(exc),
-                            "request_id": payload["meta"]["request_id"],
-                        }
-                    )
+                    await asyncio.sleep(delay)
+                copies = 1 + sum(rng.random() < chaos.duplicate for _ in range(2)) if rng else 1
+                for copy in range(copies):
+                    if copy:
+                        world.delivered.append(
+                            {
+                                "kind": "webhook.duplicated",
+                                "url": target.url,
+                                "request_id": rid,
+                            }
+                        )
+                    headers = {
+                        "Content-Type": "application/json",
+                        webhooks.SIGNATURE_HEADER: webhooks.sign(target.signing_key, body),
+                    }
+                    try:
+                        resp = await client.post(target.url, content=body, headers=headers)
+                        world.delivered.append(
+                            {
+                                "kind": "webhook",
+                                "url": target.url,
+                                "status": resp.status_code,
+                                "request_id": rid,
+                            }
+                        )
+                    except httpx.HTTPError as exc:
+                        log.warning("webhook delivery to %s failed: %s", target.url, exc)
+                        world.delivered.append(
+                            {
+                                "kind": "webhook",
+                                "url": target.url,
+                                "status": None,
+                                "error": str(exc),
+                                "request_id": rid,
+                            }
+                        )
 
     @app.post("/_sandbox/events")
     async def inject(body: InjectEvent) -> dict[str, Any]:
@@ -371,6 +421,28 @@ def create_app(world: World | None = None) -> FastAPI:
         if body.deliver and world.webhooks:
             asyncio.create_task(deliver(payload))
         return {"webhook": payload, "history": rec.to_jsonapi(dev.id) if rec else None}
+
+    @app.get("/_sandbox/chaos")
+    async def get_chaos() -> dict[str, Any]:
+        """Current fault-injection profile, plus what chaos has done so far
+        (from world.delivered kinds webhook.dropped/.duplicated/.delayed)."""
+        actions = [d for d in world.delivered if str(d.get("kind", "")).startswith("webhook.")]
+        return {
+            "profile": None
+            if chaos is None
+            else {k: getattr(chaos, k) for k in Chaos.__dataclass_fields__},
+            "actions": actions,
+        }
+
+    @app.post("/_sandbox/chaos")
+    async def set_chaos(body: dict[str, Any]) -> dict[str, Any]:
+        """Adjust rates live — e.g. {"drop": 0.5, "jitter_ms": 2000}."""
+        if chaos is None:
+            return _error(400, "bad_request", "server was not started with chaos enabled")
+        for k, v in body.items():
+            if k in Chaos.__dataclass_fields__ and k != "seed":
+                setattr(chaos, k, v)
+        return {"profile": {k: getattr(chaos, k) for k in Chaos.__dataclass_fields__}}
 
     @app.post("/_sandbox/webhooks")
     async def add_webhook(body: WebhookTargetIn) -> dict[str, Any]:

@@ -29,7 +29,29 @@ def _serve(args: argparse.Namespace) -> None:
     world.required_token = args.token
     if args.media_dir:
         world.media_dir = Path(args.media_dir)
-    uvicorn.run(create_app(world), host=args.host, port=args.port, log_level="info")
+    chaos = None
+    if args.chaos:
+        import dataclasses
+
+        from .world import CHAOS_PRESETS, Chaos
+
+        if args.chaos in CHAOS_PRESETS:
+            chaos = dataclasses.replace(CHAOS_PRESETS[args.chaos])
+        else:
+            try:
+                chaos = Chaos(
+                    **{
+                        k: (int(v) if v.isdigit() else float(v))
+                        for k, v in (kv.split("=") for kv in args.chaos.split(",") if "=" in kv)
+                    }
+                )
+            except (TypeError, ValueError) as exc:
+                raise SystemExit(
+                    f"--chaos must be a preset {sorted(CHAOS_PRESETS)} or key=value list "
+                    f"({sorted(Chaos.__dataclass_fields__)}): {exc}"
+                ) from exc
+        chaos.seed = args.chaos_seed
+    uvicorn.run(create_app(world, chaos), host=args.host, port=args.port, log_level="info")
 
 
 def _play(args: argparse.Namespace) -> None:
@@ -116,6 +138,13 @@ def main(argv: list[str] | None = None) -> None:
         "--media-dir",
         help="directory of <device_id>.jpg/.mp4 or default.jpg/.mp4 to serve as media",
     )
+    s.add_argument(
+        "--chaos",
+        metavar="PROFILE",
+        help="fault injection: preset (delivery, flaky, storm) or key=value list "
+        "(duplicate,drop,delay_ms,jitter_ms,flaky_media,flaky_history)",
+    )
+    s.add_argument("--chaos-seed", type=int, default=0, help="deterministic fault stream")
     s.set_defaults(fn=_serve)
 
     s = sub.add_parser("play", help="replay a built-in or YAML scenario")

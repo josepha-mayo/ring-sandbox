@@ -91,6 +91,21 @@ async def ring_hook(request: Request):
     if ev.event_type == "motion_detected" and ev.sub_type == "human": ...
 ```
 
+## Chaos fault injection
+
+`ring-sandbox serve --chaos storm` runs the emulator with a fault-injection profile:
+webhook deliveries can be duplicated, dropped, or delayed with jitter, and history/media
+endpoints can return transient 500s. Presets: `delivery` (dup/drop/delay only), `flaky`
+(endpoint failures only), `storm` (both). A custom profile is a key=value list:
+`--chaos drop=0.2,duplicate=0.4,jitter_ms=1500`. `--chaos-seed N` makes the fault stream
+deterministic for reproducible runs.
+
+Every injected fault is recorded — `GET /_sandbox/chaos` returns the active profile plus
+the actions taken so far (`webhook.dropped`, `webhook.duplicated`, `webhook.delayed` with
+the applied ms). `POST /_sandbox/chaos` adjusts rates live (`{"drop": 0.5}`) without
+restarting. The point is proving the *receiver*: a correct consumer dedupes re-delivered
+`request_id`s, tolerates out-of-order arrival, and keeps working through flaky polls.
+
 ## pytest
 
 ```python
