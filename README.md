@@ -122,4 +122,6 @@ def test_visit_detection(ring_client, ring_control):
 
 Built during the Amazon Developer Hackathon 2026. Response shapes follow the public documentation; where the docs are ambiguous the emulator follows what the Playground returns (see `fixtures/`). Sensors and chimes are Early Access upstream and may change.
 
+See [CHANGELOG.md](CHANGELOG.md) for release notes and [CONTRIBUTING.md](CONTRIBUTING.md) for how to help — response-shape corrections and new scenario files are the most valuable contributions.
+
 MIT licensed.
