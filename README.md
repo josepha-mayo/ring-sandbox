@@ -1,5 +1,8 @@
 # ring-sandbox
 
+[![PyPI](https://img.shields.io/pypi/v/ring-sandbox)](https://pypi.org/project/ring-sandbox/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Typed Python client **and** offline emulator for the [Ring Partner API](https://developer.amazon.com/docs/ring/api-documentation.html) (`api.amazonvision.com`).
 
 Ring ships no SDK and no local simulator. Testing a partner integration today means a real device, a 30-minute Playground token, or hand-rolled mocks. `ring-sandbox` gives you:
