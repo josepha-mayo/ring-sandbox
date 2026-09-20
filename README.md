@@ -1,6 +1,7 @@
 # ring-sandbox
 
 [![PyPI](https://img.shields.io/pypi/v/ring-sandbox)](https://pypi.org/project/ring-sandbox/)
+[![CI](https://github.com/josepha-mayo/ring-sandbox/actions/workflows/ci.yml/badge.svg)](https://github.com/josepha-mayo/ring-sandbox/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Typed Python client **and** offline emulator for the [Ring Partner API](https://developer.amazon.com/docs/ring/api-documentation.html) (`api.amazonvision.com`).
