@@ -58,11 +58,12 @@ ring-sandbox serve --port 8787
 ring-sandbox webhook http://localhost:8000/webhooks/ring --key my-hmac-key
 ring-sandbox play delivery --speed 5           # courier: vehicle -> human -> ding -> package -> vehicle
 ring-sandbox play home_aide_visit --backdate   # 90-minute visit written straight into history
-ring-sandbox play examples/late_arrival.yml    # your own scenario: name, description, steps
+ring-sandbox play late_arrival                 # shipped example — resolves by name, no repo needed
+ring-sandbox play examples/late_arrival.yml    # or your own scenario file: name, description, steps
 ring-sandbox inject --type motion_detected --sub-type human
 ```
 
-Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. See `examples/` for documented files: `late_arrival.yml` (aide shows 25 min late), `partial_blackout.yml` (camera dies mid-visit — departure unobserved), `visitor_not_worker.yml` (courier activity in the aide's window).
+Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. Three documented examples ship **inside the wheel** (also in `examples/`): `late_arrival` (aide shows 25 min late), `partial_blackout` (camera dies mid-visit — departure unobserved), `visitor_not_worker` (courier activity in the aide's window). `ring_sandbox.scenarios.resolve()` tries built-ins, then shipped examples, then file paths.
 
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 

@@ -55,13 +55,12 @@ def _serve(args: argparse.Namespace) -> None:
 
 
 def _play(args: argparse.Namespace) -> None:
-    from .scenarios import BUILTIN, load_yaml, run
+    from .scenarios import resolve, run
 
-    scenario = (
-        load_yaml(args.scenario)
-        if args.scenario.endswith((".yml", ".yaml"))
-        else BUILTIN[args.scenario]
-    )
+    try:
+        scenario = resolve(args.scenario)
+    except KeyError as exc:
+        raise SystemExit(str(exc.args[0])) from exc
     events = run(
         scenario, args.url, speed=args.speed, backdate=args.backdate, deliver=not args.no_deliver
     )
@@ -147,7 +146,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--chaos-seed", type=int, default=0, help="deterministic fault stream")
     s.set_defaults(fn=_serve)
 
-    s = sub.add_parser("play", help="replay a built-in or YAML scenario")
+    s = sub.add_parser("play", help="replay a built-in, wheel-shipped example, or YAML scenario")
     s.add_argument("scenario")
     s.add_argument("--url", default=DEFAULT_URL)
     s.add_argument("--speed", type=float, default=1.0)

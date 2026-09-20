@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.3.0 — unreleased
+
+### Added
+
+- **Example scenarios ship inside the wheel** — `late_arrival`,
+  `partial_blackout`, and `visitor_not_worker` resolve by name everywhere:
+  `ring-sandbox play partial_blackout` works with a plain PyPI install, no
+  repo checkout needed. `ring_sandbox.scenarios.resolve(name_or_path)`
+  tries built-in → shipped example → YAML path; `examples()` returns the
+  shipped set as name → YAML text.
+
+## 0.2.0 — 2026-09-20
 
 ### Added
 

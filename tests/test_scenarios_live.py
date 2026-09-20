@@ -118,3 +118,29 @@ def test_shipped_examples_parse_and_sort():
         assert scenario.name == path.stem
         assert scenario.steps, path
         assert all(s.offset_s >= 0 for s in scenario.steps)
+
+
+def test_examples_ship_as_package_data_and_resolve_by_name():
+    """The wheel ships the example YAMLs — a PyPI-only install can `play` them."""
+    from ring_sandbox.scenarios import BUILTIN, examples, load_example, resolve
+
+    shipped = examples()
+    assert {"late_arrival", "partial_blackout", "visitor_not_worker"} <= set(shipped)
+    for name, text in shipped.items():
+        scenario = load_example(name)
+        assert scenario.name == name and scenario.steps, name
+        assert "offset_s" in text
+    assert resolve("delivery") is BUILTIN["delivery"]
+    assert resolve("partial_blackout").name == "partial_blackout"
+    with pytest.raises(KeyError, match="no example scenario"):
+        resolve("no_such_scenario")
+
+
+def test_resolve_loads_yaml_paths(tmp_path):
+    from ring_sandbox.scenarios import resolve
+
+    path = tmp_path / "custom.yml"
+    path.write_text(
+        "name: custom\nsteps:\n  - offset_s: 0\n    type: motion_detected\n", encoding="utf-8"
+    )
+    assert resolve(str(path)).name == "custom"

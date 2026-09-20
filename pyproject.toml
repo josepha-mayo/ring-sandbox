@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ring-sandbox"
-version = "0.2.0"
+version = "0.3.0"
 description = "Typed Python client and offline emulator for the Ring Partner API (api.amazonvision.com)"
 readme = "README.md"
 license = "MIT"
@@ -49,7 +49,11 @@ Homepage = "https://github.com/josepha-mayo/ring-sandbox"
 Documentation = "https://developer.amazon.com/docs/ring/api-documentation.html"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ring_sandbox"]
+only-include = ["src/ring_sandbox", "examples"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/ring_sandbox" = "ring_sandbox"
+"examples" = "ring_sandbox/examples"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

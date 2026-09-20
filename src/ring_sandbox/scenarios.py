@@ -110,6 +110,52 @@ def load_yaml(path: str) -> Scenario:
     return Scenario(raw["name"], raw.get("description", ""), steps)
 
 
+def examples() -> dict[str, str]:
+    """Name → YAML text for every scenario shipped inside the wheel
+    (they also live in the repo's ``examples/`` directory — the fallback
+    keeps editable checkouts working, where the package dir has no copy)."""
+    from importlib.resources import files
+    from pathlib import Path
+
+    out: dict[str, str] = {}
+    roots = [
+        files("ring_sandbox").joinpath("examples"),
+        Path(__file__).resolve().parents[2] / "examples",
+    ]
+    for root in roots:
+        try:
+            for res in root.iterdir():
+                name = getattr(res, "name", "")
+                if name.endswith((".yml", ".yaml")):
+                    out[name.rsplit(".", 1)[0]] = res.read_text(encoding="utf-8")
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if out:
+            break
+    return out
+
+
+def load_example(name: str) -> Scenario:
+    """Load a wheel-shipped example scenario by name — works with no repo checkout."""
+    import yaml  # optional dependency (server extra)
+
+    available = examples()
+    if name not in available:
+        raise KeyError(f"no example scenario {name!r}; shipped: {', '.join(sorted(available))}")
+    raw = yaml.safe_load(available[name])
+    steps = [Step(**s) for s in raw.get("steps", [])]
+    return Scenario(raw["name"], raw.get("description", ""), steps)
+
+
+def resolve(name_or_path: str) -> Scenario:
+    """Built-in name → wheel-shipped example name → YAML file path."""
+    if name_or_path in BUILTIN:
+        return BUILTIN[name_or_path]
+    if name_or_path.endswith((".yml", ".yaml")):
+        return load_yaml(name_or_path)
+    return load_example(name_or_path)
+
+
 def _resolve_device(state: dict[str, Any], ref: str | None) -> str | None:
     if ref is None:
         return None
