@@ -132,8 +132,29 @@ def test_examples_ship_as_package_data_and_resolve_by_name():
         assert "offset_s" in text
     assert resolve("delivery") is BUILTIN["delivery"]
     assert resolve("partial_blackout").name == "partial_blackout"
-    with pytest.raises(KeyError, match="no example scenario"):
+    with pytest.raises(KeyError, match="unknown scenario.*home_aide_visit"):
         resolve("no_such_scenario")
+
+
+def test_load_yaml_rejects_malformed_files_with_clear_errors(tmp_path):
+    from ring_sandbox.scenarios import resolve
+
+    missing_name = tmp_path / "missing_name.yml"
+    missing_name.write_text("steps: []\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing required 'name'"):
+        resolve(str(missing_name))
+
+    not_mapping = tmp_path / "list.yml"
+    not_mapping.write_text("- just\n- a\n- list\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="expected a mapping"):
+        resolve(str(not_mapping))
+
+    bad_step = tmp_path / "bad_step.yml"
+    bad_step.write_text(
+        "name: x\nsteps:\n  - offset_s: 0\n    bogus_field: true\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="bad step"):
+        resolve(str(bad_step))
 
 
 def test_resolve_loads_yaml_paths(tmp_path):

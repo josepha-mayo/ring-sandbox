@@ -101,13 +101,24 @@ BUILTIN: dict[str, Scenario] = {
 }
 
 
+def _parse_scenario(raw: Any, source: str) -> Scenario:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{source}: expected a mapping with 'name' and 'steps'")
+    if "name" not in raw:
+        raise ValueError(f"{source}: missing required 'name'")
+    try:
+        steps = [Step(**s) for s in raw.get("steps", [])]
+    except TypeError as exc:
+        raise ValueError(f"{source}: bad step — {exc}") from exc
+    return Scenario(raw["name"], raw.get("description", ""), steps)
+
+
 def load_yaml(path: str) -> Scenario:
     import yaml  # optional dependency (server extra)
 
     with open(path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
-    steps = [Step(**s) for s in raw.get("steps", [])]
-    return Scenario(raw["name"], raw.get("description", ""), steps)
+    return _parse_scenario(raw, str(path))
 
 
 def examples() -> dict[str, str]:
@@ -143,8 +154,7 @@ def load_example(name: str) -> Scenario:
     if name not in available:
         raise KeyError(f"no example scenario {name!r}; shipped: {', '.join(sorted(available))}")
     raw = yaml.safe_load(available[name])
-    steps = [Step(**s) for s in raw.get("steps", [])]
-    return Scenario(raw["name"], raw.get("description", ""), steps)
+    return _parse_scenario(raw, f"example {name!r}")
 
 
 def resolve(name_or_path: str) -> Scenario:
@@ -153,7 +163,13 @@ def resolve(name_or_path: str) -> Scenario:
         return BUILTIN[name_or_path]
     if name_or_path.endswith((".yml", ".yaml")):
         return load_yaml(name_or_path)
-    return load_example(name_or_path)
+    try:
+        return load_example(name_or_path)
+    except KeyError:
+        names = ", ".join(sorted(BUILTIN) + sorted(examples()))
+        raise KeyError(
+            f"unknown scenario {name_or_path!r} — names: {names}, or a .yml/.yaml file path"
+        ) from None
 
 
 def _resolve_device(state: dict[str, Any], ref: str | None) -> str | None:
