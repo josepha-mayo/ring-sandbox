@@ -1,6 +1,44 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.4.0 — unreleased
+
+### Added
+
+- **App-integration lifecycle** — `POST|GET|PATCH
+  /v1/accounts/me/app-integrations` mirrors the real two-step link flow:
+  POST confirms the link (status `awaiting`, fires `app_integration_added`
+  plus `device_added` for every consented device), PATCH
+  `{"status": "completed"}` finalizes. `DELETE /_sandbox/app-integration`
+  simulates the user unlinking in the Ring app (`app_integration_removed` +
+  `device_removed` + `subscription_deactivated`).
+- **Subscriptions** — `GET /v1/accounts/me/subscriptions` lists per-device
+  plans/trials; `POST|DELETE /_sandbox/subscriptions` activate/deactivate
+  them and fire the lifecycle webhooks that gate event delivery
+  (`plan_id` + `expires_at` attributes).
+- **WHEP live-video sessions** — `POST
+  /v1/devices/{id}/media/streaming/whep/sessions` accepts an
+  `application/sdp` offer (`?component_id=` supported) and returns 201 + an
+  SDP answer + a `Location` session URL; `DELETE` closes it. Live views log
+  an `on_demand` history entry like the real API.
+- **Rate-limit / availability chaos** — new `Chaos` fields `rate_limit` and
+  `unavailable` short-circuit `/v1/*` calls with 429/503 + `Retry-After`;
+  new `limited` preset. The client's existing 429 retry path is exercised
+  end-to-end (seeded rolls are deterministic).
+- **Device lifecycle webhooks** — `POST /_sandbox/devices` now fires
+  `device_added`; new `DELETE /_sandbox/devices/{id}` fires `device_removed`.
+- **Client** — `app_integration()`, `link_app_integration()`,
+  `update_app_integration()`, `subscriptions()`, `whep_session()`,
+  `whep_close()`, and the `WhepSession` return type. New `AppIntegration`
+  and `Subscription` models. `/_sandbox/state` reports the account plane.
+- `webhooks.build_event()` accepts `source_type="accounts"` for
+  account-scoped lifecycle events (no `devices` relationship).
+
+### Fixed
+
+- `__version__` was stale at `0.1.0`; now tracks the release (`0.4.0`) and
+  the emulator reports it.
+
+## 0.3.0 — 2026-09-23
 
 ### Added
 

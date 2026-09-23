@@ -289,6 +289,8 @@ class Chaos:
     jitter_ms: int = 0
     flaky_media: float = 0.0
     flaky_history: float = 0.0
+    rate_limit: float = 0.0
+    unavailable: float = 0.0
 
     def rng(self):
         import random
@@ -299,6 +301,7 @@ class Chaos:
 CHAOS_PRESETS: dict[str, Chaos] = {
     "delivery": Chaos(duplicate=0.25, drop=0.10, delay_ms=300, jitter_ms=1500),
     "flaky": Chaos(flaky_media=0.30, flaky_history=0.20),
+    "limited": Chaos(rate_limit=0.40, unavailable=0.10),
     "storm": Chaos(
         duplicate=0.30,
         drop=0.15,
@@ -306,6 +309,8 @@ CHAOS_PRESETS: dict[str, Chaos] = {
         jitter_ms=2000,
         flaky_media=0.20,
         flaky_history=0.20,
+        rate_limit=0.15,
+        unavailable=0.05,
     ),
 }
 
@@ -326,6 +331,9 @@ class World:
     required_token: str | None = None
     media_dir: Path | None = None
     delivered: list[dict[str, Any]] = field(default_factory=list)
+    app_integration_status: str | None = None
+    subscriptions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    whep_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # ------------------------------------------------------------- devices
 
@@ -335,6 +343,9 @@ class World:
 
     def get(self, device_id: str) -> SandboxDevice | None:
         return self.devices.get(device_id)
+
+    def remove(self, device_id: str) -> SandboxDevice | None:
+        return self.devices.pop(device_id, None)
 
     def cameras(self) -> list[SandboxDevice]:
         return [d for d in self.devices.values() if d.is_camera]

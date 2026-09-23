@@ -10,7 +10,7 @@ import asyncio
 import dataclasses
 import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -18,7 +18,8 @@ from fastapi import Depends, FastAPI, Form, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import webhooks
+from . import __version__, webhooks
+from .models import WebhookEventType
 from .world import (
     Chaos,
     DeviceKind,
@@ -103,10 +104,21 @@ class DeviceIn(BaseModel):
     components: list[str] = Field(default_factory=list)
 
 
+class AppIntegrationPatch(BaseModel):
+    status: str
+
+
+class SubscriptionIn(BaseModel):
+    device_id: str
+    plan_id: str = "sandbox.protect.basic"
+    state: str = "active"  # active | trialing
+    days: int = 30
+
+
 def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAPI:
     world = world or default_world()
     chaos = dataclasses.replace(chaos) if chaos else None
-    app = FastAPI(title="ring-sandbox", version="0.1.0", docs_url="/_sandbox/docs")
+    app = FastAPI(title="ring-sandbox", version=__version__, docs_url="/_sandbox/docs")
     app.state.world = world
     app.state.chaos = chaos
     rng = chaos.rng() if chaos else None
@@ -115,6 +127,28 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if rng and rate and rng.random() < rate:
             return _error(500, "chaos", "chaos-injected transient failure — retry")
         return None
+
+    @app.middleware("http")
+    async def _chaos_throttle(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """Chaos rate limiting on the data plane only (``/v1/*``): short-circuits
+        with 429/503 + ``Retry-After`` so clients exercise backoff paths. The
+        control plane stays deterministic."""
+        if rng and chaos and request.url.path.startswith("/v1/"):
+            if chaos.rate_limit and rng.random() < chaos.rate_limit:
+                world.delivered.append(
+                    {"kind": "chaos.rate_limited", "path": request.url.path, "status": 429}
+                )
+                resp = _error(429, "rate_limited", "rate limit exceeded — retry after delay")
+                resp.headers["Retry-After"] = "1"
+                return resp
+            if chaos.unavailable and rng.random() < chaos.unavailable:
+                world.delivered.append(
+                    {"kind": "chaos.unavailable", "path": request.url.path, "status": 503}
+                )
+                resp = _error(503, "service_unavailable", "service unavailable — retry after delay")
+                resp.headers["Retry-After"] = "2"
+                return resp
+        return await call_next(request)
 
     # ------------------------------------------------------------------ auth
 
@@ -172,6 +206,92 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         return {
             "meta": meta(),
             "data": {"type": "users", "id": world.account_id, "attributes": world.user},
+        }
+
+    def _fire(payload: dict[str, Any]) -> None:
+        if world.webhooks:
+            asyncio.create_task(deliver(payload))
+
+    # --------------------------------------------------------- app integrations
+
+    def _app_integration_resource() -> dict[str, Any] | None:
+        if world.app_integration_status is None:
+            return None
+        return {
+            "type": "app-integrations",
+            "id": world.account_id,
+            "attributes": {"status": world.app_integration_status},
+        }
+
+    @app.post("/v1/accounts/me/app-integrations", dependencies=[Depends(auth)])
+    async def app_integration_link() -> dict[str, Any]:
+        """Partner confirms the account link (nonce verification) -> status
+        ``awaiting``. Fires ``app_integration_added`` plus ``device_added`` for
+        every consented device; those are account-linking events that fire
+        regardless of subscription state. Re-confirming is idempotent."""
+        if world.app_integration_status is None:
+            world.app_integration_status = "awaiting"
+            _fire(
+                webhooks.build_event(
+                    event_type=WebhookEventType.APP_INTEGRATION_ADDED,
+                    source_type="accounts",
+                    account_id=world.account_id,
+                )
+            )
+            for d in world.devices.values():
+                _fire(
+                    webhooks.build_event(
+                        event_type=WebhookEventType.DEVICE_ADDED,
+                        device_id=d.id,
+                        account_id=world.account_id,
+                    )
+                )
+        return {"meta": meta(), "data": _app_integration_resource()}
+
+    @app.get("/v1/accounts/me/app-integrations", dependencies=[Depends(auth)])
+    async def app_integration_get() -> dict[str, Any]:
+        return {"meta": meta(), "data": _app_integration_resource()}
+
+    @app.patch("/v1/accounts/me/app-integrations", dependencies=[Depends(auth)])
+    async def app_integration_update(body: AppIntegrationPatch) -> dict[str, Any]:
+        """Advance the integration status. The real flow only moves forward:
+        ``awaiting`` -> ``completed`` (finalizes the link in the Ring app UI)."""
+        if world.app_integration_status is None:
+            return _error(400, "bad_request", "no app integration to update")
+        if body.status == world.app_integration_status:
+            return {"meta": meta(), "data": _app_integration_resource()}
+        if body.status != "completed":
+            return _error(
+                400,
+                "bad_request",
+                "status can only move forward to 'completed' "
+                f"(have {world.app_integration_status!r})",
+            )
+        world.app_integration_status = "completed"
+        return {"meta": meta(), "data": _app_integration_resource()}
+
+    # ------------------------------------------------------------- subscriptions
+
+    def _subscription_resource(sub: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "subscriptions",
+            "id": sub["id"],
+            "attributes": {
+                "plan_id": sub["plan_id"],
+                "state": sub["state"],
+                "expires_at": sub["expires_at"],
+                "created_at": sub["created_at"],
+            },
+            "relationships": {"devices": {"data": {"type": "devices", "id": sub["device_id"]}}},
+        }
+
+    @app.get("/v1/accounts/me/subscriptions", dependencies=[Depends(auth)])
+    async def subscriptions() -> dict[str, Any]:
+        """Subscriptions/trials the partner app holds for this user — per-device;
+        empty when no trial or plan is active (which gates event delivery)."""
+        return {
+            "meta": meta(),
+            "data": [_subscription_resource(s) for s in world.subscriptions.values()],
         }
 
     # ------------------------------------------------------------------ devices
@@ -340,6 +460,74 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         )
         return Response(status_code=204)
 
+    # ------------------------------------------------------------------ live video (WHEP)
+
+    _SDP_ANSWER = (
+        "v=0\r\n"
+        "o=- 0 0 IN IP4 127.0.0.1\r\n"
+        "s=ring-sandbox\r\n"
+        "t=0 0\r\n"
+        "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
+        "c=IN IP4 127.0.0.1\r\n"
+        "a=recvonly\r\n"
+        "a=rtpmap:96 H264/90000\r\n"
+    )
+
+    @app.post(
+        "/v1/devices/{device_id}/media/streaming/whep/sessions",
+        dependencies=[Depends(auth)],
+    )
+    async def whep_open(
+        request: Request, device_id: str, component_id: str | None = Query(default=None)
+    ) -> Response:
+        """WebRTC-HTTP Egress: client POSTs an SDP offer (video only, recvonly),
+        gets 201 + an SDP answer and a ``Location`` session URL to DELETE.
+        A live view surfaces in Event History as an ``on_demand`` entry."""
+        dev = device_or_404(device_id)
+        if not dev.is_camera:
+            return _error(400, "bad_request", "device has no camera")
+        ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if ctype != "application/sdp":
+            return _error(
+                415, "unsupported_media_type", "WHEP offers use Content-Type: application/sdp"
+            )
+        offer = await request.body()
+        if not offer.lstrip().startswith(b"v="):
+            return _error(400, "bad_request", "body must be an SDP offer (starts with v=)")
+        if component_id and dev.components and component_id not in dev.components:
+            return _error(400, "bad_request", f"unknown component_id {component_id!r}")
+        session_id = secrets.token_urlsafe(16)
+        world.whep_sessions[session_id] = {
+            "device_id": device_id,
+            "component_id": component_id,
+            "created_ms": now_ms(),
+        }
+        world.record_on_demand(device_id)
+        world.delivered.append(
+            {"kind": "whep.session.open", "session_id": session_id, "device_id": device_id}
+        )
+        return Response(
+            status_code=201,
+            content=_SDP_ANSWER,
+            media_type="application/sdp",
+            headers={
+                "Location": f"/v1/devices/{device_id}/media/streaming/whep/sessions/{session_id}"
+            },
+        )
+
+    @app.delete(
+        "/v1/devices/{device_id}/media/streaming/whep/sessions/{session_id}",
+        dependencies=[Depends(auth)],
+    )
+    async def whep_close(device_id: str, session_id: str) -> Response:
+        sess = world.whep_sessions.pop(session_id, None)
+        if sess is None or sess["device_id"] != device_id:
+            raise NotFound(f"whep session {session_id} not found")
+        world.delivered.append(
+            {"kind": "whep.session.close", "session_id": session_id, "device_id": device_id}
+        )
+        return Response(status_code=204)
+
     # ------------------------------------------------------------------ control plane
 
     async def deliver(payload: dict[str, Any]) -> None:
@@ -454,12 +642,116 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         world.webhooks.clear()
         return {"targets": []}
 
+    @app.post("/_sandbox/subscriptions")
+    async def add_subscription(body: SubscriptionIn) -> dict[str, Any]:
+        """Activate a partner-app subscription/trial for a device — the sandbox
+        stand-in for the Ring appstore enrollment flow. Fires
+        ``subscription_activated`` (which is what gates event delivery)."""
+        dev = device_or_404(body.device_id)
+        if body.state not in ("active", "trialing"):
+            return _error(400, "bad_request", "state must be active or trialing")
+        now = datetime.now(tz=UTC)
+        expires = now + timedelta(days=body.days)
+        sub = {
+            "id": f"sub_{secrets.token_hex(6)}",
+            "device_id": dev.id,
+            "plan_id": body.plan_id,
+            "state": body.state,
+            "expires_at": expires.isoformat().replace("+00:00", "Z"),
+            "created_at": now.isoformat().replace("+00:00", "Z"),
+        }
+        world.subscriptions[sub["id"]] = sub
+        _fire(
+            webhooks.build_event(
+                event_type=WebhookEventType.SUBSCRIPTION_ACTIVATED,
+                device_id=dev.id,
+                account_id=world.account_id,
+                extra_attributes={"plan_id": sub["plan_id"], "expires_at": sub["expires_at"]},
+            )
+        )
+        return {"meta": meta(), "data": _subscription_resource(sub)}
+
+    @app.delete("/_sandbox/subscriptions/{subscription_id}")
+    async def del_subscription(subscription_id: str) -> dict[str, Any]:
+        sub = world.subscriptions.pop(subscription_id, None)
+        if sub is None:
+            raise NotFound(f"subscription {subscription_id} not found")
+        _fire(
+            webhooks.build_event(
+                event_type=WebhookEventType.SUBSCRIPTION_DEACTIVATED,
+                device_id=sub["device_id"],
+                account_id=world.account_id,
+                extra_attributes={"plan_id": sub["plan_id"], "expires_at": sub["expires_at"]},
+            )
+        )
+        return {"meta": meta(), "data": _subscription_resource(sub)}
+
+    @app.delete("/_sandbox/app-integration")
+    async def unlink_app_integration() -> dict[str, Any]:
+        """Simulate the user unlinking the partner app in the Ring app: fires
+        ``app_integration_removed`` plus ``device_removed`` per device and
+        ``subscription_deactivated`` per subscription, then clears the link."""
+        if world.app_integration_status is None:
+            return _error(400, "bad_request", "no app integration to unlink")
+        world.app_integration_status = None
+        _fire(
+            webhooks.build_event(
+                event_type=WebhookEventType.APP_INTEGRATION_REMOVED,
+                source_type="accounts",
+                account_id=world.account_id,
+            )
+        )
+        for d in world.devices.values():
+            _fire(
+                webhooks.build_event(
+                    event_type=WebhookEventType.DEVICE_REMOVED,
+                    device_id=d.id,
+                    account_id=world.account_id,
+                )
+            )
+        for sub in list(world.subscriptions.values()):
+            _fire(
+                webhooks.build_event(
+                    event_type=WebhookEventType.SUBSCRIPTION_DEACTIVATED,
+                    device_id=sub["device_id"],
+                    account_id=world.account_id,
+                    extra_attributes={
+                        "plan_id": sub["plan_id"],
+                        "expires_at": sub["expires_at"],
+                    },
+                )
+            )
+        world.subscriptions.clear()
+        world.whep_sessions.clear()
+        return {"ok": True}
+
     @app.post("/_sandbox/devices")
     async def add_device(body: DeviceIn) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"battery": body.battery, "components": body.components}
         if body.id:
             kwargs["id"] = body.id
         dev = world.add(SandboxDevice(body.kind, body.name, **kwargs))
+        _fire(
+            webhooks.build_event(
+                event_type=WebhookEventType.DEVICE_ADDED,
+                device_id=dev.id,
+                account_id=world.account_id,
+            )
+        )
+        return {"data": dev.to_resource()}
+
+    @app.delete("/_sandbox/devices/{device_id}")
+    async def remove_device(device_id: str) -> dict[str, Any]:
+        dev = world.remove(device_id)
+        if dev is None:
+            raise NotFound(f"device {device_id} not found")
+        _fire(
+            webhooks.build_event(
+                event_type=WebhookEventType.DEVICE_REMOVED,
+                device_id=dev.id,
+                account_id=world.account_id,
+            )
+        )
         return {"data": dev.to_resource()}
 
     @app.get("/_sandbox/state")
@@ -477,6 +769,11 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
                 for d in world.devices.values()
             ],
             "webhooks": [t.url for t in world.webhooks],
+            "app_integration_status": world.app_integration_status,
+            "subscriptions": [_subscription_resource(s) for s in world.subscriptions.values()],
+            "whep_sessions": [
+                {"session_id": sid, **sess} for sid, sess in world.whep_sessions.items()
+            ],
             "delivered": world.delivered[-50:],
         }
 
@@ -485,6 +782,9 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         fresh = default_world()
         world.devices = fresh.devices
         world.delivered.clear()
+        world.app_integration_status = None
+        world.subscriptions.clear()
+        world.whep_sessions.clear()
         return {"ok": True}
 
     @app.get("/_sandbox/health")

@@ -62,6 +62,50 @@ class User(_Model):
         return self.id
 
 
+# --------------------------------------------------------------------------- app integrations
+
+
+class AppIntegrationAttributes(_Model):
+    """Partner-integration status for the linked account. The real API moves it
+    ``awaiting`` -> ``completed``: POST confirms the link (nonce verification),
+    PATCH ``{"status": "completed"}`` finalizes it."""
+
+    status: str | None = None
+
+
+class AppIntegration(_Model):
+    type: Literal["app-integrations"] = "app-integrations"
+    id: str
+    attributes: AppIntegrationAttributes = Field(default_factory=AppIntegrationAttributes)
+
+
+# --------------------------------------------------------------------------- subscriptions
+
+
+class SubscriptionAttributes(_Model):
+    """A Ring Protect plan (or app-specific trial) as seen by the partner app.
+    Per-device subscription state gates event delivery and device API access."""
+
+    plan_id: str | None = None
+    state: str | None = None
+    expires_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class Subscription(_Model):
+    type: Literal["subscriptions"] = "subscriptions"
+    id: str
+    attributes: SubscriptionAttributes = Field(default_factory=SubscriptionAttributes)
+    relationships: dict[str, Relationship] = Field(default_factory=dict)
+
+    @property
+    def device_id(self) -> str | None:
+        rel = self.relationships.get("devices")
+        if rel is None or isinstance(rel.data, list) or rel.data is None:
+            return None
+        return rel.data.id
+
+
 # --------------------------------------------------------------------------- devices
 
 

@@ -140,8 +140,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument(
         "--chaos",
         metavar="PROFILE",
-        help="fault injection: preset (delivery, flaky, storm) or key=value list "
-        "(duplicate,drop,delay_ms,jitter_ms,flaky_media,flaky_history)",
+        help="fault injection: preset (delivery, flaky, limited, storm) or key=value list "
+        "(duplicate,drop,delay_ms,jitter_ms,flaky_media,flaky_history,rate_limit,unavailable)",
     )
     s.add_argument("--chaos-seed", type=int, default=0, help="deterministic fault stream")
     s.set_defaults(fn=_serve)

@@ -8,7 +8,7 @@ Typed Python client **and** offline emulator for the [Ring Partner API](https://
 
 Ring ships no SDK and no local simulator. Testing a partner integration today means a real device, a 30-minute Playground token, or hand-rolled mocks. `ring-sandbox` gives you:
 
-- **`RingClient`** – a small, typed, synchronous client over `httpx` covering users, device discovery (with `?include=` side-loading), status, capabilities, configurations, location, event history (auto-pagination), image snapshots (303 redirect flow), media clips (200/206/416 semantics), and chime playback.
+- **`RingClient`** – a small, typed, synchronous client over `httpx` covering users, device discovery (with `?include=` side-loading), status, capabilities, configurations, location, event history (auto-pagination), image snapshots (303 redirect flow), media clips (200/206/416 semantics), chime playback, the app-integration lifecycle (`awaiting` → `completed`), subscription queries, and WHEP live-video sessions.
 - **Webhook helpers** – HMAC-SHA256 `X-Signature` signing/verification over raw bytes, v1.1 payload construction, and parsing into a `WebhookEvent`.
 - **Emulator** – a FastAPI app that speaks the same JSON:API shapes at `/v1/...`, plus a `/_sandbox` control plane to inject events, register webhook targets (the emulator signs and delivers them), add devices (doorbells, cameras, chimes, Early Access sensors), and reset.
 - **Scenarios** – scripted event sequences (`delivery`, `home_aide_visit`, `short_visit`, `no_show`, `device_flap`, or your own YAML), replayable in real time, time-compressed, or back-dated into history.
@@ -81,8 +81,12 @@ The emulator reproduces the parts of the API that bite integrators:
 | Chime playback restricted to the app's two audio slots | yes |
 | Sensor `faulted` semantics, `255` battery sentinel on mains devices | yes |
 | Webhook v1.1 payloads with `sub_type`, `component_ids`, HMAC `X-Signature` | yes |
-| OAuth / account linking / nonce flow | no (use any bearer token, or `--token` to pin one) |
-| WHEP / RTSP live video | no |
+| App-integration lifecycle (`awaiting` → `completed`), `app_integration_*` + `device_added`/`removed` account-linking webhooks | yes |
+| `GET /v1/accounts/me/subscriptions` + `subscription_activated`/`deactivated` webhooks (plan_id, expires_at) | yes |
+| WHEP sessions: SDP offer → 201 + SDP answer + `Location`, `DELETE` to close, live views log `on_demand` history | yes |
+| `429`/`503` + `Retry-After` rate-limit faults (`--chaos rate_limit=…`) | yes |
+| OAuth / nonce verification | no (use any bearer token, or `--token` to pin one) |
+| RTSP live video (`rtsps://`) | no |
 
 ## Webhooks
 
@@ -99,11 +103,12 @@ async def ring_hook(request: Request):
 ## Chaos fault injection
 
 `ring-sandbox serve --chaos storm` runs the emulator with a fault-injection profile:
-webhook deliveries can be duplicated, dropped, or delayed with jitter, and history/media
-endpoints can return transient 500s. Presets: `delivery` (dup/drop/delay only), `flaky`
-(endpoint failures only), `storm` (both). A custom profile is a key=value list:
-`--chaos drop=0.2,duplicate=0.4,jitter_ms=1500`. `--chaos-seed N` makes the fault stream
-deterministic for reproducible runs.
+webhook deliveries can be duplicated, dropped, or delayed with jitter; history/media
+endpoints can return transient 500s; and `/v1/*` calls can be throttled with `429`/`503`
++ `Retry-After` so clients exercise backoff. Presets: `delivery` (dup/drop/delay only),
+`flaky` (endpoint failures only), `limited` (429/503 only), `storm` (all). A custom
+profile is a key=value list: `--chaos drop=0.2,rate_limit=0.3,jitter_ms=1500`.
+`--chaos-seed N` makes the fault stream deterministic for reproducible runs.
 
 Every injected fault is recorded — `GET /_sandbox/chaos` returns the active profile plus
 the actions taken so far (`webhook.dropped`, `webhook.duplicated`, `webhook.delayed` with

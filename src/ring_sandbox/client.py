@@ -10,6 +10,7 @@ import ipaddress
 import math
 import time
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -19,6 +20,7 @@ import httpx
 
 from .models import (
     APIError,
+    AppIntegration,
     Capabilities,
     Configurations,
     Device,
@@ -29,6 +31,7 @@ from .models import (
     MediaClip,
     Snapshot,
     Status,
+    Subscription,
     User,
 )
 
@@ -47,6 +50,19 @@ class RingAPIError(Exception):
     @property
     def code(self) -> str | None:
         return self.errors[0].code if self.errors else None
+
+
+@dataclass(frozen=True)
+class WhepSession:
+    """A WHEP live-video session: SDP answer + the session URL to DELETE."""
+
+    session_url: str
+    sdp_answer: str
+    device_id: str
+
+    @property
+    def session_id(self) -> str:
+        return self.session_url.rsplit("/", 1)[-1]
 
 
 class RingClient:
@@ -316,6 +332,36 @@ class RingClient:
     def me(self) -> User:
         return User.model_validate(self._get_json("/v1/users/me")["data"])
 
+    # --------------------------------------------------------- app integrations
+
+    def app_integration(self) -> AppIntegration | None:
+        """Current partner-integration state, or ``None`` when the account
+        link has not been confirmed (or was unlinked)."""
+        data = self._get_json("/v1/accounts/me/app-integrations")["data"]
+        return AppIntegration.model_validate(data) if data else None
+
+    def link_app_integration(self, nonce: str | None = None) -> AppIntegration:
+        """POST the account-link confirmation (nonce verification) — moves the
+        integration to ``awaiting``. Idempotent once linked."""
+        body = {"nonce": nonce} if nonce is not None else {}
+        data = self._request("POST", "/v1/accounts/me/app-integrations", json=body).json()["data"]
+        return AppIntegration.model_validate(data)
+
+    def update_app_integration(self, status: str) -> AppIntegration:
+        """PATCH the integration status — the real flow only moves forward to
+        ``completed``, which finalizes the link in the Ring app UI."""
+        data = self._request(
+            "PATCH", "/v1/accounts/me/app-integrations", json={"status": status}
+        ).json()["data"]
+        return AppIntegration.model_validate(data)
+
+    # ------------------------------------------------------------- subscriptions
+
+    def subscriptions(self) -> list[Subscription]:
+        """Subscriptions/trials this app holds for the user (per-device)."""
+        doc = self._get_json("/v1/accounts/me/subscriptions")
+        return [Subscription.model_validate(r) for r in doc["data"]]
+
     # ----------------------------------------------------------------- devices
 
     def devices(self, include: Iterable[str] = ()) -> list[DeviceBundle]:
@@ -530,6 +576,48 @@ class RingClient:
             headers={"Content-Type": "application/json"},
         )
         return resp.json() if resp.content else {}
+
+    # ----------------------------------------------------------------- live video (WHEP)
+
+    def whep_session(
+        self, device_id: str, sdp_offer: str | bytes, component_id: str | None = None
+    ) -> WhepSession:
+        """Start a WebRTC/WHEP live-video session (video only, recvonly).
+
+        ``sdp_offer`` is the full SDP from the client's ``RTCPeerConnection``;
+        the response carries the SDP answer and a ``Location`` session URL.
+        """
+        if type(device_id) is not str or not device_id:
+            raise ValueError("device_id must be a non-empty string")
+        body = sdp_offer.encode() if isinstance(sdp_offer, str) else sdp_offer
+        if not body.lstrip().startswith(b"v="):
+            raise ValueError("sdp_offer must be an SDP offer (starts with v=)")
+        params = {"component_id": component_id} if component_id else None
+        resp = self._request(
+            "POST",
+            f"/v1/devices/{_path_id(device_id)}/media/streaming/whep/sessions",
+            params=params,
+            content=body,
+            headers={"Content-Type": "application/sdp"},
+        )
+        location = resp.headers.get("Location")
+        if resp.status_code != 201 or not location:
+            raise ValueError("WHEP session response missing 201/Location")
+        return WhepSession(session_url=location, sdp_answer=resp.text, device_id=device_id)
+
+    def whep_close(self, session: WhepSession | str) -> None:
+        """Close a WHEP session — pass the session object or its ``Location`` URL.
+        Accepts the origin-relative path or an absolute URL on the API origin
+        (the real API returns absolute URLs)."""
+        url = session.session_url if isinstance(session, WhepSession) else session
+        if type(url) is not str or not url:
+            raise ValueError("session_url must be a non-empty Location URL")
+        if not url.startswith("/"):
+            absolute = _origin_url(url)
+            url = absolute.path + (f"?{absolute.query.decode()}" if absolute.query else "")
+        if not url.startswith("/v1/"):
+            raise ValueError("session_url must be a /v1/ session URL")
+        self._request("DELETE", url)
 
 
 # --------------------------------------------------------------------------- helpers

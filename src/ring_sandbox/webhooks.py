@@ -64,7 +64,8 @@ def parse(
 def build_event(
     *,
     event_type: str,
-    device_id: str,
+    device_id: str | None = None,
+    source_type: str = "devices",
     account_id: str = "ava1.ring.account.SANDBOX",
     occurred_at: datetime | None = None,
     sub_type: str | None = None,
@@ -72,12 +73,21 @@ def build_event(
     request_id: str | None = None,
     extra_attributes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Construct a v1.1 webhook payload identical in shape to what Ring sends."""
+    """Construct a v1.1 webhook payload identical in shape to what Ring sends.
+
+    Device-scoped events (the default) set ``source`` to the device id and carry a
+    ``devices`` relationship. Account-scoped lifecycle events (``app_integration_*``)
+    pass ``source_type="accounts"`` — the account id becomes the source and no device
+    relationship is emitted.
+    """
+    if source_type == "devices" and device_id is None:
+        raise ValueError("device-scoped webhook events require device_id")
+    source = device_id if source_type == "devices" else account_id
     occurred_at = occurred_at or datetime.now(tz=UTC)
     ts_ms = int(occurred_at.timestamp() * 1000)
     attributes: dict[str, Any] = {
-        "source": device_id,
-        "source_type": "devices",
+        "source": source,
+        "source_type": source_type,
         "timestamp": ts_ms,
     }
     if sub_type is not None:
@@ -86,6 +96,9 @@ def build_event(
         attributes["component_ids"] = list(component_ids)
     if extra_attributes:
         attributes.update(extra_attributes)
+    relationships: dict[str, Any] = {}
+    if source_type == "devices" and device_id is not None:
+        relationships["devices"] = {"links": {"self": f"/v1/devices/{device_id}"}}
     return {
         "meta": {
             "version": "1.1",
@@ -94,10 +107,10 @@ def build_event(
             "account_id": account_id,
         },
         "data": {
-            "id": f"{device_id}_{event_type}_{ts_ms}",
+            "id": f"{source}_{event_type}_{ts_ms}",
             "type": event_type,
             "attributes": attributes,
-            "relationships": {"devices": {"links": {"self": f"/v1/devices/{device_id}"}}},
+            "relationships": relationships,
         },
     }
 
