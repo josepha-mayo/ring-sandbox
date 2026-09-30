@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -179,6 +179,49 @@ def test_invalid_media_inputs_fail_before_network():
             ring.snapshot_at("camera", datetime(2026, 1, 1))
         with pytest.raises(ValueError):
             ring.snapshot_at("camera", 1000, width=10)
+
+
+def test_freshness_window_bounds_replays():
+    """meta.time lives inside the signed body, so a captured verbatim delivery
+    has an authentic-but-stale timestamp — the window catches what a purged
+    dedupe tombstone no longer can."""
+    import json as _json
+    from datetime import timedelta
+
+    key = "k3y"
+    payload = webhooks.build_event(event_type="button_press", device_id="cam")
+    body = webhooks.encode(payload)
+    sig = webhooks.sign(key, body)
+    ev = webhooks.parse(body, signing_key=key, signature=sig, max_age_s=60)
+    assert ev.request_id == payload["meta"]["request_id"]
+
+    # Age the signed body: meta.time moves back — authenticity unchanged,
+    # freshness is what separates "authentic" from "acceptable".
+    old = _json.loads(body)
+    old["meta"]["time"] = "2001-01-01T00:00:00Z"
+    stale = webhooks.encode(old)
+    stale_sig = webhooks.sign(key, stale)
+    with pytest.raises(webhooks.SignatureError, match="freshness"):
+        webhooks.parse(stale, signing_key=key, signature=stale_sig, max_age_s=60)
+    # The same stale body still verifies without a window — the inbox worker
+    # re-verifies stored deliveries for authenticity, not freshness.
+    assert (
+        webhooks.parse(stale, signing_key=key, signature=stale_sig).request_id
+        == (payload["meta"]["request_id"])
+    )
+
+    # max_age without verification is a config error, not a silent skip
+    with pytest.raises(ValueError):
+        webhooks.parse(body, max_age_s=60)
+
+    # future-dated meta.time beyond skew is rejected the same way
+    future = _json.loads(body)
+    future["meta"]["time"] = (
+        (datetime.now(UTC) + timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    )
+    fbody = webhooks.encode(future)
+    with pytest.raises(webhooks.SignatureError, match="freshness"):
+        webhooks.parse(fbody, signing_key=key, signature=webhooks.sign(key, fbody), max_age_s=60)
 
 
 def test_non_ascii_signature_is_rejected_without_crashing():

@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.1 — 2026-09-30
+
+### Added
+
+- **Webhook freshness verification** — `webhooks.parse()` accepts
+  `max_age_s`: the sender's `meta.time` lives inside the HMAC-signed body,
+  so a captured delivery replayed verbatim carries an authentic but stale
+  timestamp and cannot be refreshed without breaking the signature. A
+  bounded replay window that complements `request_id` dedupe — dedupe
+  survives restarts, freshness survives a purged tombstone. Requires
+  `signing_key` (an unsigned `meta.time` proves nothing); stale or
+  future-dated deliveries raise `SignatureError`. Consumers re-verifying
+  *stored* deliveries should omit `max_age_s` — authenticity is timeless,
+  freshness is an intake property.
+
+## 0.4.0 — 2026-09-29
 
 ### Added
 

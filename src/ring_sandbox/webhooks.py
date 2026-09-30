@@ -49,16 +49,40 @@ class SignatureError(ValueError):
 
 
 def parse(
-    raw_body: bytes, *, signing_key: str | None = None, signature: str | None = None
+    raw_body: bytes,
+    *,
+    signing_key: str | None = None,
+    signature: str | None = None,
+    max_age_s: float | None = None,
 ) -> WebhookEvent:
     """Parse (and optionally verify) a webhook body into a :class:`WebhookEvent`.
 
     Pass ``signing_key`` and ``signature`` to enforce verification; omit both to parse only
     (useful in tests or when a reverse proxy already verified the request).
+
+    ``max_age_s`` bounds delivery freshness: the sender's ``meta.time`` is inside the
+    signed body, so a captured delivery replayed verbatim carries an authentic but stale
+    timestamp and a forger cannot refresh it without breaking the HMAC. It complements
+    ``request_id`` dedupe rather than replacing it — dedupe survives restarts, freshness
+    survives a purged tombstone. Requires verification; an unsigned ``meta.time`` proves
+    nothing, so combining ``max_age_s`` without ``signing_key`` raises ``ValueError``.
     """
     if signing_key is not None and not verify(signing_key, raw_body, signature):
         raise SignatureError("Ring webhook signature mismatch")
-    return WebhookEvent.model_validate_json(raw_body)
+    if max_age_s is not None and signing_key is None:
+        raise ValueError("max_age_s is meaningless without signature verification")
+    event = WebhookEvent.model_validate_json(raw_body)
+    if max_age_s is not None:
+        meta_time = event.meta.time
+        if meta_time.tzinfo is None:
+            meta_time = meta_time.replace(tzinfo=UTC)
+        age_s = abs((datetime.now(tz=UTC) - meta_time).total_seconds())
+        if age_s > max_age_s:
+            raise SignatureError(
+                f"webhook meta.time is {age_s:.0f}s old — "
+                f"outside the {max_age_s:.0f}s freshness window"
+            )
+    return event
 
 
 def build_event(
