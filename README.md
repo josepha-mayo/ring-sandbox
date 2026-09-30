@@ -100,6 +100,12 @@ async def ring_hook(request: Request):
     if ev.event_type == "motion_detected" and ev.sub_type == "human": ...
 ```
 
+`parse(..., max_age_s=3600)` additionally bounds delivery freshness: `meta.time`
+is inside the signed body, so a captured delivery replayed verbatim carries an
+authentic-but-stale timestamp — a second replay defense behind `request_id`
+dedupe. Omit `max_age_s` when re-verifying stored deliveries (authenticity is
+timeless; freshness is an intake property).
+
 ## Chaos fault injection
 
 `ring-sandbox serve --chaos storm` runs the emulator with a fault-injection profile:
