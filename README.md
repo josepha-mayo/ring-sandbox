@@ -103,7 +103,7 @@ The emulator reproduces the parts of the API that bite integrators:
 | App-integration lifecycle (`awaiting` → `completed`), `app_integration_*` + `device_added`/`removed` account-linking webhooks | yes |
 | `GET /v1/accounts/me/subscriptions` + `subscription_activated`/`deactivated` webhooks (plan_id, expires_at) | yes |
 | Token scopes: `--read-token T` marks `T` as `ava.v1:read`-scoped — GETs pass, mutations 403 `insufficient_scope`, the subscriptions surface 422 (all observed live) | yes |
-| Plan gating: `--enforce-subscriptions` makes entitlement real — no retained history, 403 `subscription_required` on media/WHEP, and observation webhooks suppressed (journaled as `webhook.suppressed`) while `subscription_*`/`device_*` lifecycle events still deliver | yes, opt-in |
+| Plan gating: `--enforce-subscriptions` makes entitlement real — no retained history, 403 `subscription_required` on media/WHEP, and observation webhooks suppressed (journaled as `webhook.suppressed`) while `subscription_*`/`device_*` lifecycle events still deliver; injected `subscription_*` steps mutate the entitlement they announce | yes, opt-in |
 | WHEP sessions: SDP offer → 201 + SDP answer + `Location`, `DELETE` to close, live views log `on_demand` history | yes |
 | `429`/`503` + `Retry-After` rate-limit faults (`--chaos rate_limit=…`) | yes |
 | OAuth / nonce verification | no (use any bearer token, or `--token` to pin one) |
