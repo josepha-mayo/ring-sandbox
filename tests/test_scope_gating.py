@@ -156,6 +156,31 @@ def test_control_plane_token_registration(ring_world: World):
     ).status_code in (200, 201)
 
 
+def test_injected_subscription_events_mutate_entitlement(ring_world: World):
+    """An injected subscription_* event isn't theater — it flips the world's
+    entitlement so gated surfaces answer accordingly."""
+    ring_world.enforce_subscriptions = True
+    c = authed(_raw(ring_world), "tok")
+    dev = ring_world.cameras()[0]
+    assert not ring_world.device_subscribed(dev.id)
+
+    c.post("/_sandbox/events", json={"device_id": dev.id, "type": "subscription_activated"})
+    assert ring_world.device_subscribed(dev.id)
+    r = c.post(
+        f"/v1/devices/{dev.id}/media/image/download",
+        json={"type": "at_timestamp", "timestamp": 1},
+    )
+    assert r.status_code != 403
+
+    c.post("/_sandbox/events", json={"device_id": dev.id, "type": "subscription_deactivated"})
+    assert not ring_world.device_subscribed(dev.id)
+    r = c.post(
+        f"/v1/devices/{dev.id}/media/image/download",
+        json={"type": "at_timestamp", "timestamp": 1},
+    )
+    assert r.status_code == 403
+
+
 def test_expired_subscription_does_not_entitle(ring_world: World):
     ring_world.enforce_subscriptions = True
     dev = ring_world.cameras()[0]

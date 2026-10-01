@@ -9,7 +9,7 @@ import struct
 import uuid
 import zlib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -451,6 +451,26 @@ class World:
             dev.tamper = True
         elif event_type == WebhookEventType.TAMPER_CLEARED:
             dev.tamper = False
+        elif event_type == WebhookEventType.SUBSCRIPTION_ACTIVATED:
+            # Keep entitlement state truthful with the delivered event: an
+            # activation creates the plan row it announces.
+            if not self.device_subscribed(device_id):
+                now = datetime.now(tz=UTC)
+                self.subscriptions[f"sub_{device_id}.{at_ms}"] = {
+                    "id": f"sub_{device_id}.{at_ms}",
+                    "device_id": device_id,
+                    "plan_id": "sandbox.protect.basic",
+                    "state": "active",
+                    "expires_at": (now + timedelta(days=30)).isoformat().replace("+00:00", "Z"),
+                    "created_at": now.isoformat().replace("+00:00", "Z"),
+                }
+        elif event_type == WebhookEventType.SUBSCRIPTION_DEACTIVATED:
+            # Lapse voids the entitlement it announces — subsequent gated
+            # surfaces (history/media/WHEP/webhook fan-out) reflect it.
+            for sub in self.subscriptions.values():
+                if sub["device_id"] == device_id and sub["state"] in ("active", "trialing"):
+                    sub["state"] = "canceled"
+                    sub["expires_at"] = datetime.now(tz=UTC).isoformat().replace("+00:00", "Z")
         hist_type = _HISTORY_TYPE.get(event_type)  # type: ignore[call-overload]
         if hist_type is None:
             return None
