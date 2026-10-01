@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0 — 2026-10-04
+
+### Added
+
+- **Record → replay** — `load_fixture_docs(world, docs)` plus
+  `ring-sandbox serve --fixtures DIR` and `POST /_sandbox/load` replay
+  `record` output back through the emulator: real device resources are
+  served with their original ids and compound `included` members
+  (`device-status`/`device-capabilities`/`device-configurations`/`locations`)
+  verbatim, and recorded history replays with `meta.riid`,
+  `cv_detections`, and absent `sub_type` preserved. Capture a real API
+  surface once, replay it deterministically in CI forever.
+- **Token scopes** — `World.token_scopes`, `POST|DELETE
+  /_sandbox/tokens`, and `serve --read-token TOKEN` register an
+  `ava.v1:read`-scoped bearer token: GETs pass, mutations answer
+  `403 insufficient_scope`, and the subscriptions surface answers `422` —
+  the statuses recorded from live `api.amazonvision.com` probing.
+  Unregistered tokens stay unconstrained.
+- **Plan enforcement** — `serve --enforce-subscriptions` (or
+  `World.enforce_subscriptions`) makes entitlement real: no active
+  subscription/trial means empty Event History, `403
+  subscription_required` on media downloads and WHEP sessions, and
+  observation webhooks suppressed (journaled as `webhook.suppressed`).
+  `subscription_*`/`device_*` lifecycle events still deliver — they carry
+  the entitlement signal itself.
+- **Coherent subscription lifecycle** — injected
+  `subscription_activated`/`subscription_deactivated` events now mutate
+  the subscription rows they announce, so gated surfaces answer
+  truthfully after the event; scenarios can script plan lapses that
+  actually lapse.
+
 ## 0.4.1 — 2026-09-30
 
 ### Added
