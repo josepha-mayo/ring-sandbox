@@ -67,6 +67,25 @@ Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, opt
 
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 
+### Record → replay
+
+Capture a real API surface once, replay it in CI forever:
+
+```bash
+ring-sandbox record --token <playground token> --out fixtures/   # snapshot real responses
+ring-sandbox serve --fixtures fixtures/                          # replay them in the emulator
+```
+
+`--fixtures` loads `devices.json` (+ included `device-status`/`device-capabilities`/
+`device-configurations`/`locations` resources), `me.json`, and
+`history[.-on-demand].<device_id>.json`. Recorded devices keep their real IDs and
+serve the recorded included resources **verbatim** — only genuinely mutable fields
+(`online`, `reported_at`, `name`) are overlaid by the emulator. The same load is
+available at runtime via `POST /_sandbox/load` with either `{"path": "fixtures/"}`
+or a `{filename: parsed_json}` body, so a test suite can replay a recording
+without restarting the server. `fixtures/` in this repo is a real Playground
+capture — `tests/test_fixture_replay.py` pins its parity.
+
 ### Fidelity notes
 
 The emulator reproduces the parts of the API that bite integrators:

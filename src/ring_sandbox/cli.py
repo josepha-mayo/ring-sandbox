@@ -29,6 +29,14 @@ def _serve(args: argparse.Namespace) -> None:
     world.required_token = args.token
     if args.media_dir:
         world.media_dir = Path(args.media_dir)
+    if args.fixtures:
+        from .world import load_fixture_docs
+
+        counts = load_fixture_docs(world, args.fixtures)
+        print(
+            f"loaded fixtures from {args.fixtures}: "
+            f"{counts['devices']} device(s), {counts['history']} history event(s)"
+        )
     chaos = None
     if args.chaos:
         import dataclasses
@@ -144,6 +152,12 @@ def main(argv: list[str] | None = None) -> None:
         "(duplicate,drop,delay_ms,jitter_ms,flaky_media,flaky_history,rate_limit,unavailable)",
     )
     s.add_argument("--chaos-seed", type=int, default=0, help="deterministic fault stream")
+    s.add_argument(
+        "--fixtures",
+        metavar="DIR",
+        help="load `record` output (devices.json/me.json/history.*.json) into the "
+        "world at boot — record a real API surface once, replay it in CI forever",
+    )
     s.set_defaults(fn=_serve)
 
     s = sub.add_parser("play", help="replay a built-in, wheel-shipped example, or YAML scenario")

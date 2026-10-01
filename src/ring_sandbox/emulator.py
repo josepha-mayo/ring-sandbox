@@ -777,6 +777,21 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             "delivered": world.delivered[-50:],
         }
 
+    @app.post("/_sandbox/load")
+    async def load(request: Request) -> dict[str, Any]:
+        """Load `record` fixtures into the running world — body is either
+        ``{"path": "fixtures/"}`` or a ``{filename: parsed_json}`` map. The
+        record→replay recipe: capture a real API surface once, replay it in
+        CI forever."""
+        from .world import load_fixture_docs
+
+        body = await request.json()
+        if isinstance(body, dict) and "path" in body:
+            counts = load_fixture_docs(world, body["path"])
+        else:
+            counts = load_fixture_docs(world, body)
+        return {"ok": True, "loaded": counts}
+
     @app.post("/_sandbox/reset")
     async def reset() -> dict[str, Any]:
         fresh = default_world()
