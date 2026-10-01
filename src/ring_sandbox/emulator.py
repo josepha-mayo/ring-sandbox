@@ -58,6 +58,30 @@ class _Unauthorized(Exception):
         self.detail = detail
 
 
+class _ScopeDenied(Exception):
+    """Bearer token authenticated but its registered scopes don't permit the
+    operation — observed live: ``ava.v1:read``-scoped tokens get 403 on
+    app-integration mutations and 422 on the subscriptions surface."""
+
+    def __init__(self, status: int, detail: str):
+        self.status = status
+        self.detail = detail
+
+
+# Device-scoped event types that carry account/lifecycle meaning — they always
+# deliver, even without a subscription, because they ARE the subscription signal.
+_LIFECYCLE_EVENTS = {
+    WebhookEventType.DEVICE_ADDED,
+    WebhookEventType.DEVICE_REMOVED,
+    WebhookEventType.DEVICE_ONLINE,
+    WebhookEventType.DEVICE_OFFLINE,
+    WebhookEventType.APP_INTEGRATION_ADDED,
+    WebhookEventType.APP_INTEGRATION_REMOVED,
+    WebhookEventType.SUBSCRIPTION_ACTIVATED,
+    WebhookEventType.SUBSCRIPTION_DEACTIVATED,
+}
+
+
 # Request bodies live at module scope so FastAPI can resolve the (postponed) annotations.
 
 
@@ -115,6 +139,11 @@ class SubscriptionIn(BaseModel):
     days: int = 30
 
 
+class TokenIn(BaseModel):
+    token: str
+    scopes: list[str] = Field(default_factory=lambda: ["ava.v1:read"])
+
+
 def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAPI:
     world = world or default_world()
     chaos = dataclasses.replace(chaos) if chaos else None
@@ -152,16 +181,29 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
 
     # ------------------------------------------------------------------ auth
 
-    async def auth(authorization: str | None = Header(default=None)) -> None:
+    async def auth(request: Request, authorization: str | None = Header(default=None)) -> None:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise _Unauthorized("missing bearer token")
         token = authorization.split(" ", 1)[1].strip()
-        if not token or (world.required_token and token != world.required_token):
+        known = token in world.token_scopes
+        if not token or (world.required_token and token != world.required_token and not known):
             raise _Unauthorized("invalid or expired token")
+        scopes = world.scopes_for(token)
+        if scopes is not None and scopes <= {"ava.v1:read"}:
+            # Read-scoped token (the Playground's restricted grant): the
+            # subscriptions surface answers 422 and every mutation 403.
+            if request.url.path.rstrip("/").endswith("/subscriptions"):
+                raise _ScopeDenied(422, "token scope does not include subscription access")
+            if request.method not in ("GET", "HEAD"):
+                raise _ScopeDenied(403, "token scope is read-only")
 
     @app.exception_handler(_Unauthorized)
     async def _unauth(_: Request, exc: _Unauthorized) -> JSONResponse:
         return _error(401, "unauthorized", exc.detail)
+
+    @app.exception_handler(_ScopeDenied)
+    async def _denied(_: Request, exc: _ScopeDenied) -> JSONResponse:
+        return _error(exc.status, "insufficient_scope", exc.detail)
 
     @app.exception_handler(NotFound)
     async def _nf(_: Request, exc: NotFound) -> JSONResponse:
@@ -172,6 +214,18 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if dev is None:
             raise NotFound(f"device {device_id} not found or not accessible")
         return dev
+
+    def _subscription_gate(device_id: str) -> JSONResponse | None:
+        """Opt-in plan enforcement (`World.enforce_subscriptions`): media and
+        live-view surfaces fail 403 when the device has no active subscription —
+        the upstream behavior partners must handle."""
+        if world.enforce_subscriptions and not world.device_subscribed(device_id):
+            return _error(
+                403,
+                "subscription_required",
+                "device has no active subscription or trial",
+            )
+        return None
 
     def meta() -> dict[str, str]:
         return {"time": datetime.now(tz=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")}
@@ -209,6 +263,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         }
 
     def _fire(payload: dict[str, Any]) -> None:
+        if _suppressed(payload):
+            return
         if world.webhooks:
             asyncio.create_task(deliver(payload))
 
@@ -354,6 +410,9 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if chaos and (fail := _flaky(chaos.flaky_history)):
             return fail  # type: ignore[return-value]
         dev = device_or_404(device_id)
+        if world.enforce_subscriptions and not world.device_subscribed(device_id):
+            # No active plan = no retained event history to page over.
+            return {"data": [], "links": {}}
         page_key = request.query_params.get("page[key]")
         filters = [f.strip() for f in event_types.split(",")] if event_types else []
         recs = [r for r in dev.history if r.matches(filters)]
@@ -379,6 +438,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if chaos and (fail := _flaky(chaos.flaky_media)):
             return fail
         dev = device_or_404(device_id)
+        if (gate := _subscription_gate(device_id)) is not None:
+            return gate
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
         if body.components and len(body.components) != 1:
@@ -421,6 +482,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if chaos and (fail := _flaky(chaos.flaky_media)):
             return fail
         dev = device_or_404(device_id)
+        if (gate := _subscription_gate(device_id)) is not None:
+            return gate
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
         if body.duration > 900_000:
@@ -484,6 +547,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         gets 201 + an SDP answer and a ``Location`` session URL to DELETE.
         A live view surfaces in Event History as an ``on_demand`` entry."""
         dev = device_or_404(device_id)
+        if (gate := _subscription_gate(device_id)) is not None:
+            return gate
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
         ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -529,6 +594,30 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         return Response(status_code=204)
 
     # ------------------------------------------------------------------ control plane
+
+    def _suppressed(payload: dict[str, Any]) -> bool:
+        """Plan gating for event delivery (``World.enforce_subscriptions``):
+        device-scoped *observation* events don't fan out when the device has no
+        active subscription — the plan is the entitlement. Lifecycle types still
+        post: they're how a partner learns the entitlement changed. The denial is
+        journaled in ``world.delivered`` even with no targets registered."""
+        if not world.enforce_subscriptions:
+            return False
+        data = payload.get("data", {})
+        attrs = data.get("attributes", {})
+        if attrs.get("source_type") != "devices" or data.get("type") in _LIFECYCLE_EVENTS:
+            return False
+        if world.device_subscribed(attrs.get("source", "")):
+            return False
+        world.delivered.append(
+            {
+                "kind": "webhook.suppressed",
+                "request_id": payload["meta"]["request_id"],
+                "device_id": attrs.get("source"),
+                "event_type": data.get("type"),
+            }
+        )
+        return True
 
     async def deliver(payload: dict[str, Any]) -> None:
         body = webhooks.encode(payload)
@@ -606,8 +695,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             sub_type=body.sub_type,
             component_ids=dev.components or None,
         )
-        if body.deliver and world.webhooks:
-            asyncio.create_task(deliver(payload))
+        if body.deliver:
+            _fire(payload)
         return {"webhook": payload, "history": rec.to_jsonapi(dev.id) if rec else None}
 
     @app.get("/_sandbox/chaos")
@@ -670,6 +759,19 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             )
         )
         return {"meta": meta(), "data": _subscription_resource(sub)}
+
+    @app.post("/_sandbox/tokens")
+    async def add_token(body: TokenIn) -> dict[str, Any]:
+        """Register a bearer token with explicit scopes — a token not registered
+        carries full access; `ava.v1:read` alone permits GETs only."""
+        world.token_scopes[body.token] = set(body.scopes)
+        return {"token": body.token, "scopes": sorted(body.scopes)}
+
+    @app.delete("/_sandbox/tokens/{token}")
+    async def del_token(token: str) -> dict[str, Any]:
+        if world.token_scopes.pop(token, None) is None:
+            raise NotFound(f"token {token!r} not registered")
+        return {"token": token, "scopes": None}
 
     @app.delete("/_sandbox/subscriptions/{subscription_id}")
     async def del_subscription(subscription_id: str) -> dict[str, Any]:

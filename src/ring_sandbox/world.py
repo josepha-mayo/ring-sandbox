@@ -374,11 +374,34 @@ class World:
         }
     )
     required_token: str | None = None
+    token_scopes: dict[str, set[str]] = field(default_factory=dict)
+    enforce_subscriptions: bool = False
     media_dir: Path | None = None
     delivered: list[dict[str, Any]] = field(default_factory=list)
     app_integration_status: str | None = None
     subscriptions: dict[str, dict[str, Any]] = field(default_factory=dict)
     whep_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # ----------------------------------------------------------- token auth
+
+    def scopes_for(self, token: str) -> set[str] | None:
+        """Scopes recorded for a bearer token — ``None`` means unconstrained
+        (a token not registered carries full access, matching pre-gating
+        behavior for worlds that never touch scope state)."""
+        return self.token_scopes.get(token)
+
+    def device_subscribed(self, device_id: str) -> bool:
+        """True when the device has a subscription/trial that is both in an
+        entitled state and unexpired — what gates event delivery and media."""
+        now = datetime.now(tz=UTC)
+        for sub in self.subscriptions.values():
+            if sub["device_id"] != device_id:
+                continue
+            if sub["state"] not in ("active", "trialing"):
+                continue
+            if datetime.fromisoformat(sub["expires_at"].replace("Z", "+00:00")) > now:
+                return True
+        return False
 
     # ------------------------------------------------------------- devices
 

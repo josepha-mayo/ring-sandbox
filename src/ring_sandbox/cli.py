@@ -27,6 +27,9 @@ def _serve(args: argparse.Namespace) -> None:
 
     world = default_world()
     world.required_token = args.token
+    world.enforce_subscriptions = args.enforce_subscriptions
+    for tok in args.read_token:
+        world.token_scopes[tok] = {"ava.v1:read"}
     if args.media_dir:
         world.media_dir = Path(args.media_dir)
     if args.fixtures:
@@ -152,6 +155,20 @@ def main(argv: list[str] | None = None) -> None:
         "(duplicate,drop,delay_ms,jitter_ms,flaky_media,flaky_history,rate_limit,unavailable)",
     )
     s.add_argument("--chaos-seed", type=int, default=0, help="deterministic fault stream")
+    s.add_argument(
+        "--enforce-subscriptions",
+        action="store_true",
+        help="gate media/history/webhook event delivery on an active per-device "
+        "subscription (add trials via POST /_sandbox/subscriptions)",
+    )
+    s.add_argument(
+        "--read-token",
+        action="append",
+        default=[],
+        metavar="TOKEN",
+        help="register an extra bearer token scoped ava.v1:read — GETs pass, "
+        "mutations 403, the subscriptions surface 422 (observed live behavior)",
+    )
     s.add_argument(
         "--fixtures",
         metavar="DIR",
