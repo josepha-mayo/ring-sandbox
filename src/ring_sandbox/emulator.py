@@ -121,6 +121,15 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
     app = FastAPI(title="ring-sandbox", version=__version__, docs_url="/_sandbox/docs")
     app.state.world = world
     app.state.chaos = chaos
+    # The deliveries still in flight. Both call sites fired them with
+    # `asyncio.create_task` and kept no handle, so a consumer running a batch
+    # had no way to know when the queue had drained: with the `delivery` preset
+    # each delivery is held up to `delay_ms + jitter_ms` (1.8 s), and the only
+    # recourse was to sleep for a guessed number of seconds. On a loaded
+    # machine that guess is short and the run reports fewer deliveries than
+    # were made — a measurement that moves with the load of the machine rather
+    # than with the code under test.
+    app.state.in_flight = set()
     rng = chaos.rng() if chaos else None
 
     def _flaky(rate: float) -> JSONResponse | None:
@@ -210,7 +219,14 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
 
     def _fire(payload: dict[str, Any]) -> None:
         if world.webhooks:
-            asyncio.create_task(deliver(payload))
+            _track(asyncio.create_task(deliver(payload)))
+
+    def _track(task: asyncio.Task[None]) -> None:
+        """Keep a handle so `pending` can be answered, and drop it on the way
+        out. Without the reference the task can also be garbage-collected
+        mid-flight, which is the other reason to hold it."""
+        app.state.in_flight.add(task)
+        task.add_done_callback(app.state.in_flight.discard)
 
     # --------------------------------------------------------- app integrations
 
@@ -535,12 +551,36 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         rid = payload["meta"]["request_id"]
         async with httpx.AsyncClient(timeout=5.0) as client:
             for target in list(world.webhooks):
-                if rng and chaos.drop and rng.random() < chaos.drop:
+                # Every draw for this delivery is taken here, before the first
+                # await. `Chaos` promises that "seed makes the fault stream
+                # deterministic so chaos runs are reproducible in tests", and
+                # that held only while deliveries were serial: `inject` ends in
+                # `asyncio.create_task(deliver(...))`, so several deliveries
+                # run at once, and the `await asyncio.sleep(delay)` below used
+                # to sit BETWEEN two draws from this single shared rng. Which
+                # coroutine drew next then depended on the event loop, and the
+                # same seed gave a different number of drops from one run to
+                # the next.
+                #
+                # Which delivery is dropped still depends on the order they
+                # start in, and cannot not: `meta.request_id` is a fresh uuid4,
+                # so a delivery has no identity that survives a restart. What
+                # is restored is the part a measurement rests on — the same
+                # seed and the same number of deliveries give the same counts,
+                # because the stream is now consumed in whole per-delivery
+                # chunks instead of interleaved ones.
+                if rng:
+                    drop = chaos.drop and rng.random() < chaos.drop
+                    delay = (chaos.delay_ms + rng.randint(0, chaos.jitter_ms)) / 1000
+                    copies = 1 + sum(rng.random() < chaos.duplicate for _ in range(2))
+                else:
+                    drop, delay, copies = False, 0, 1
+
+                if drop:
                     world.delivered.append(
                         {"kind": "webhook.dropped", "url": target.url, "request_id": rid}
                     )
                     continue
-                delay = (chaos.delay_ms + rng.randint(0, chaos.jitter_ms)) / 1000 if rng else 0
                 if delay:
                     world.delivered.append(
                         {
@@ -551,7 +591,6 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
                         }
                     )
                     await asyncio.sleep(delay)
-                copies = 1 + sum(rng.random() < chaos.duplicate for _ in range(2)) if rng else 1
                 for copy in range(copies):
                     if copy:
                         world.delivered.append(
@@ -607,19 +646,28 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             component_ids=dev.components or None,
         )
         if body.deliver and world.webhooks:
-            asyncio.create_task(deliver(payload))
+            _track(asyncio.create_task(deliver(payload)))
         return {"webhook": payload, "history": rec.to_jsonapi(dev.id) if rec else None}
 
     @app.get("/_sandbox/chaos")
     async def get_chaos() -> dict[str, Any]:
-        """Current fault-injection profile, plus what chaos has done so far
-        (from world.delivered kinds webhook.dropped/.duplicated/.delayed)."""
+        """Current fault-injection profile, what chaos has done so far (from
+        world.delivered kinds webhook.dropped/.duplicated/.delayed), and how
+        many deliveries are still in flight.
+
+        ``actions`` is the whole history, while ``GET /_sandbox/state``
+        truncates ``delivered`` to its last 50 entries — counting faults from
+        ``/state`` undercounts silently on any run of size. Count them here."""
         actions = [d for d in world.delivered if str(d.get("kind", "")).startswith("webhook.")]
         return {
             "profile": None
             if chaos is None
             else {k: getattr(chaos, k) for k in Chaos.__dataclass_fields__},
             "actions": actions,
+            # Poll until this reaches zero instead of sleeping: a batch run
+            # then waits for the queue rather than for a number somebody
+            # guessed about another machine.
+            "pending": len(app.state.in_flight),
         }
 
     @app.post("/_sandbox/chaos")

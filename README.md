@@ -141,6 +141,20 @@ the applied ms). `POST /_sandbox/chaos` adjusts rates live (`{"drop": 0.5}`) wit
 restarting. The point is proving the *receiver*: a correct consumer dedupes re-delivered
 `request_id`s, tolerates out-of-order arrival, and keeps working through flaky polls.
 
+Two things to know when a batch run counts faults:
+
+- **Count from `/_sandbox/chaos`, not from `/_sandbox/state`.** `/chaos` returns the whole
+  history of actions; `/state` truncates `delivered` to its last 50 entries, so counting
+  faults there undercounts silently on any run of size.
+- **`/_sandbox/chaos` reports `pending`**, the deliveries still in flight. Poll it to zero
+  rather than sleeping: a delivery is held up to `delay_ms + jitter_ms` (1.8 s on the
+  `delivery` preset), so a fixed wait is a guess about someone else's machine, and on a
+  loaded one the run ends while deliveries are still out and reports fewer than were made.
+
+`--chaos-seed N` fixes *how many* faults a run injects, for a given number of deliveries.
+It does not fix *which* delivery gets which: `meta.request_id` is a fresh uuid4, so a
+delivery has no identity that survives a restart, and deliveries run concurrently.
+
 ## pytest
 
 ```python
