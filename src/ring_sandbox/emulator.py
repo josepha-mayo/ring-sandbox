@@ -10,11 +10,13 @@ import asyncio
 import dataclasses
 import logging
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, Form, Header, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -177,7 +179,26 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
                 resp = _error(503, "service_unavailable", "service unavailable — retry after delay")
                 resp.headers["Retry-After"] = "2"
                 return resp
-        return await call_next(request)
+        resp = await call_next(request)
+        # Real API advertises a steady-state quota on every data-plane call
+        # (100 req/s/token) — surface the accounting headers so client code
+        # can exercise them, and actually trip a 429 past the limit.
+        if request.url.path.startswith("/v1/"):
+            window = int(time.time())
+            if world._rl_window != window:
+                world._rl_window, world._rl_used = window, 0
+            world._rl_used += 1
+            resp.headers["X-RateLimit-Limit"] = "100"
+            resp.headers["X-RateLimit-Remaining"] = str(max(0, 100 - world._rl_used))
+            if world._rl_used > 100:
+                world.delivered.append(
+                    {"kind": "rate_limit.tripped", "path": request.url.path, "status": 429}
+                )
+                resp = _error(429, "rate_limited", "rate limit exceeded — retry after delay")
+                resp.headers["Retry-After"] = "1"
+                resp.headers["X-RateLimit-Limit"] = "100"
+                resp.headers["X-RateLimit-Remaining"] = "0"
+        return resp
 
     # ------------------------------------------------------------------ auth
 
@@ -209,6 +230,20 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
     async def _nf(_: Request, exc: NotFound) -> JSONResponse:
         return _error(404, "not_found", str(exc) or "device not found")
 
+    @app.exception_handler(RequestValidationError)
+    async def _invalid(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # The real API speaks JSON:API errors end-to-end — a malformed body
+        # must not leak FastAPI's native {"detail": [...]} 422 shape.
+        return _error(
+            422,
+            "validation_error",
+            "; ".join(
+                f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg', 'invalid')}"
+                for e in exc.errors()
+            )
+            or "request validation failed",
+        )
+
     def device_or_404(device_id: str) -> SandboxDevice:
         dev = world.get(device_id)
         if dev is None:
@@ -232,27 +267,47 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
 
     # ------------------------------------------------------------------ account
 
+    def _oauth_error(code: str, desc: str) -> JSONResponse:
+        """Token-endpoint failures use the RFC 6749 error shape
+        (``{"error", "error_description"}``), not the data plane's JSON:API."""
+        return JSONResponse(status_code=400, content={"error": code, "error_description": desc})
+
     @app.post("/oauth/token")
     async def token(
         grant_type: str = Form(...),
         refresh_token: str | None = Form(default=None),
         client_id: str | None = Form(default=None),
+        code: str | None = Form(default=None),
+        client_secret: str | None = Form(default=None),
     ) -> dict[str, Any]:
-        """RFC 6749 refresh grant. Sandbox simplification: any well-formed refresh
-        token is accepted and the world rotates to the newly issued access token."""
-        del client_id  # accepted but unused in the sandbox
-        if grant_type != "refresh_token":
-            return _error(400, "unsupported_grant_type", "only refresh_token is supported")
-        if not refresh_token:
-            return _error(400, "invalid_request", "refresh_token is required")
-        if refresh_token == "invalid":
-            return _error(400, "invalid_grant", "refresh token rejected")
+        """RFC 6749 grants. ``authorization_code``: exchange a minted code
+        (``POST /_sandbox/authz-codes``, 60 s TTL, single-use). ``refresh_token``:
+        sandbox simplification — any well-formed refresh token rotates to a new
+        access token. Both return the granted ``scope`` like the real API."""
+        del client_id, client_secret  # accepted but unused in the sandbox
+        if grant_type == "authorization_code":
+            if not code:
+                return _oauth_error("invalid_request", "code is required")
+            grant = world.authz_codes.pop(code, None)
+            if grant is None or grant["expires_ms"] < now_ms():
+                return _oauth_error("invalid_grant", "authorization code is invalid or expired")
+        elif grant_type == "refresh_token":
+            if not refresh_token:
+                return _oauth_error("invalid_request", "refresh_token is required")
+            if refresh_token == "invalid":
+                return _oauth_error("invalid_grant", "refresh token rejected")
+        else:
+            return _oauth_error(
+                "unsupported_grant_type",
+                "grant_type must be authorization_code or refresh_token",
+            )
         world.required_token = f"sandbox-{secrets.token_hex(8)}"
         return {
             "access_token": world.required_token,
             "refresh_token": f"sandbox-refresh-{secrets.token_hex(8)}",
             "token_type": "Bearer",
             "expires_in": 14400,
+            "scope": "ava.v1",
         }
 
     @app.get("/v1/users/me", dependencies=[Depends(auth)])
@@ -324,6 +379,10 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
                 f"(have {world.app_integration_status!r})",
             )
         world.app_integration_status = "completed"
+        # The consent boundary: the real API exposes no history or media from
+        # before the user completed linking — the partner's data window starts here.
+        if world.consent_at is None:
+            world.consent_at = now_ms()
         return {"meta": meta(), "data": _app_integration_resource()}
 
     # ------------------------------------------------------------- subscriptions
@@ -392,7 +451,11 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         }
 
     @app.get("/v1/devices/{device_id}/configurations", dependencies=[Depends(auth)])
-    async def configurations(device_id: str) -> dict[str, Any]:
+    async def configurations(
+        device_id: str, component_id: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        # component_id is a documented query param — accept it (the canned
+        # resource has no per-component variants to filter).
         return {"meta": meta(), "data": device_or_404(device_id).configurations_resource()}
 
     @app.get("/v1/devices/{device_id}/location", dependencies=[Depends(auth)])
@@ -411,24 +474,31 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             return fail  # type: ignore[return-value]
         dev = device_or_404(device_id)
         if world.enforce_subscriptions and not world.device_subscribed(device_id):
-            # No active plan = no retained event history to page over.
-            return {"data": [], "links": {}}
+            # No active plan = no retained event history to page over. An empty
+            # first page ships as bare {"data": []} — the real API omits "links".
+            return {"data": []}
         page_key = request.query_params.get("page[key]")
         filters = [f.strip() for f in event_types.split(",")] if event_types else []
         recs = [r for r in dev.history if r.matches(filters)]
+        if world.consent_at is not None:
+            # Consent boundary: nothing the device saw before linking is exposed.
+            recs = [r for r in recs if r.start >= world.consent_at]
+        cutoff: int | None = None
         if page_key:
             cutoff = int(datetime.fromisoformat(page_key.replace("Z", "+00:00")).timestamp() * 1000)
             recs = [r for r in recs if r.start < cutoff]
         page, rest = recs[:PAGE_SIZE], recs[PAGE_SIZE:]
-        doc: dict[str, Any] = {"data": [r.to_jsonapi(device_id) for r in page], "links": {}}
+        doc: dict[str, Any] = {"data": [r.to_jsonapi(device_id) for r in page]}
         if rest:
+            # links.next exists only while a further page exists — and the
+            # recorded trap: it drops event_types, silently widening a
+            # filtered query for clients that follow it blindly.
             nxt_ts = (
                 datetime.fromtimestamp(page[-1].start / 1000, tz=UTC)
                 .isoformat()
                 .replace("+00:00", "Z")
             )
-            q = f"page[key]={nxt_ts}" + (f"&event_types={event_types}" if event_types else "")
-            doc["links"]["next"] = f"/v1/history/devices/{device_id}/events?{q}"
+            doc["links"] = {"next": f"/v1/history/devices/{device_id}/events?page[key]={nxt_ts}"}
         return doc
 
     # ------------------------------------------------------------------ media
@@ -438,6 +508,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if chaos and (fail := _flaky(chaos.flaky_media)):
             return fail
         dev = device_or_404(device_id)
+        if not dev.online:
+            return _error(503, "device_offline", "device is offline")
         if (gate := _subscription_gate(device_id)) is not None:
             return gate
         if not dev.is_camera:
@@ -455,12 +527,21 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
             if end - body.start_timestamp > 24 * 3600 * 1000:
                 return _error(400, "bad_request", "window must be <= 24 hours")
             covering = [r for r in dev.history if body.start_timestamp <= r.start <= end]
-            ts = covering[0].start if covering else end
+            if not covering:
+                # Nothing was recording in the window — the real API refuses
+                # outright instead of returning a frame at some other time.
+                return _error(416, "TIMESTAMP_NOT_FOUND", "no media in requested range")
+            ts = covering[0].start
         else:
             return _error(400, "bad_request", "type must be at_timestamp or latest_in_range")
         if ts > now_ms() + 1000:
             return _error(400, "bad_request", "timestamp must be <= now")
-        world.record_on_demand(device_id, ts)
+        if world.consent_at is not None and ts < world.consent_at:
+            return _error(
+                403,
+                "TIME_RANGE_NOT_AUTHORIZED",
+                "requested time precedes the consent boundary",
+            )
         fmt = body.image_options.get("format", "jpeg")
         world.record_on_demand(device_id, ts)  # real API logs an on_demand history entry
         # Real API 303-redirects to a pre-signed URL; emulate that so clients exercise redirects.
@@ -482,14 +563,24 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if chaos and (fail := _flaky(chaos.flaky_media)):
             return fail
         dev = device_or_404(device_id)
+        if not dev.online:
+            return _error(503, "device_offline", "device is offline")
         if (gate := _subscription_gate(device_id)) is not None:
             return gate
         if not dev.is_camera:
             return _error(400, "bad_request", "device has no camera")
+        if body.duration <= 0:
+            return _error(400, "bad_request", "duration must be > 0")
         if body.duration > 900_000:
             return _error(400, "bad_request", "duration must be <= 900000")
         if body.components and len(body.components) != 1:
             return _error(400, "bad_request", "components takes exactly one entry")
+        if world.consent_at is not None and body.timestamp < world.consent_at:
+            return _error(
+                403,
+                "TIME_RANGE_NOT_AUTHORIZED",
+                "requested time precedes the consent boundary",
+            )
         rec = world.recording_covering(device_id, body.timestamp)
         if rec is None:
             return _error(416, "TIMESTAMP_NOT_FOUND", "no recording at requested timestamp")
@@ -525,15 +616,25 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
 
     # ------------------------------------------------------------------ live video (WHEP)
 
+    # An SDP answer a real RTCPeerConnection.setRemoteDescription() accepts:
+    # the ICE/DTLS/mid attribute lines are mandatory in a WHEP answer.
     _SDP_ANSWER = (
         "v=0\r\n"
         "o=- 0 0 IN IP4 127.0.0.1\r\n"
         "s=ring-sandbox\r\n"
         "t=0 0\r\n"
+        "a=group:BUNDLE 0\r\n"
         "m=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
         "c=IN IP4 127.0.0.1\r\n"
+        "a=mid:0\r\n"
         "a=recvonly\r\n"
+        "a=ice-ufrag:sandboxufrag\r\n"
+        "a=ice-pwd:sandboxpasswordnotarealpassword\r\n"
+        "a=ice-options:trickle\r\n"
+        "a=fingerprint:sha-256 " + ":".join(["00"] * 32) + "\r\n"
+        "a=setup:passive\r\n"
         "a=rtpmap:96 H264/90000\r\n"
+        "a=rtcp-mux\r\n"
     )
 
     @app.post(
@@ -547,6 +648,8 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         gets 201 + an SDP answer and a ``Location`` session URL to DELETE.
         A live view surfaces in Event History as an ``on_demand`` entry."""
         dev = device_or_404(device_id)
+        if not dev.online:
+            return _error(503, "device_offline", "device is offline")
         if (gate := _subscription_gate(device_id)) is not None:
             return gate
         if not dev.is_camera:
@@ -562,21 +665,31 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if component_id and dev.components and component_id not in dev.components:
             return _error(400, "bad_request", f"unknown component_id {component_id!r}")
         session_id = secrets.token_urlsafe(16)
+        # Documented session TTL: ~30 s on battery devices, ~60 s wired —
+        # the answer is only valid until the client completes the handshake.
+        ttl_ms = 30_000 if dev.battery is not None else 60_000
         world.whep_sessions[session_id] = {
             "device_id": device_id,
             "component_id": component_id,
             "created_ms": now_ms(),
+            "expires_ms": now_ms() + ttl_ms,
         }
         world.record_on_demand(device_id)
         world.delivered.append(
             {"kind": "whep.session.open", "session_id": session_id, "device_id": device_id}
         )
+        # Real API returns an absolute Location plus WHEP-spec headers —
+        # clients key off them, so emulate rather than hand-wave.
+        base = str(request.base_url).rstrip("/")
         return Response(
             status_code=201,
             content=_SDP_ANSWER,
             media_type="application/sdp",
             headers={
-                "Location": f"/v1/devices/{device_id}/media/streaming/whep/sessions/{session_id}"
+                "Location": f"{base}/v1/devices/{device_id}"
+                f"/media/streaming/whep/sessions/{session_id}",
+                "ETag": f'"{secrets.token_hex(8)}"',
+                "Link": '<stun:stun.l.google.com:19302>; rel="ice-server"',
             },
         )
 
@@ -588,6 +701,9 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         sess = world.whep_sessions.pop(session_id, None)
         if sess is None or sess["device_id"] != device_id:
             raise NotFound(f"whep session {session_id} not found")
+        if sess["expires_ms"] < now_ms():
+            # The session already expired upstream — the close is a 404, not a 204.
+            raise NotFound(f"whep session {session_id} expired")
         world.delivered.append(
             {"kind": "whep.session.close", "session_id": session_id, "device_id": device_id}
         )
@@ -654,27 +770,43 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
                         "Content-Type": "application/json",
                         webhooks.SIGNATURE_HEADER: webhooks.sign(target.signing_key, body),
                     }
-                    try:
-                        resp = await client.post(target.url, content=body, headers=headers)
-                        world.delivered.append(
-                            {
-                                "kind": "webhook",
-                                "url": target.url,
-                                "status": resp.status_code,
-                                "request_id": rid,
-                            }
-                        )
-                    except httpx.HTTPError as exc:
-                        log.warning("webhook delivery to %s failed: %s", target.url, exc)
-                        world.delivered.append(
-                            {
-                                "kind": "webhook",
-                                "url": target.url,
-                                "status": None,
-                                "error": str(exc),
-                                "request_id": rid,
-                            }
-                        )
+                    # Upstream retries failed deliveries (same event, same
+                    # request_id — receivers must be idempotent). Docs: any
+                    # non-2xx counts as failure → retry; two bounded retries.
+                    for attempt in range(3):
+                        if attempt:
+                            world.delivered.append(
+                                {
+                                    "kind": "webhook.retry",
+                                    "url": target.url,
+                                    "request_id": rid,
+                                    "attempt": attempt,
+                                }
+                            )
+                            await asyncio.sleep(0.05 * attempt)
+                        try:
+                            resp = await client.post(target.url, content=body, headers=headers)
+                            world.delivered.append(
+                                {
+                                    "kind": "webhook",
+                                    "url": target.url,
+                                    "status": resp.status_code,
+                                    "request_id": rid,
+                                }
+                            )
+                            if 200 <= resp.status_code < 300:
+                                break
+                        except httpx.HTTPError as exc:
+                            log.warning("webhook delivery to %s failed: %s", target.url, exc)
+                            world.delivered.append(
+                                {
+                                    "kind": "webhook",
+                                    "url": target.url,
+                                    "status": None,
+                                    "error": str(exc),
+                                    "request_id": rid,
+                                }
+                            )
 
     @app.post("/_sandbox/events")
     async def inject(body: InjectEvent) -> dict[str, Any]:
@@ -772,6 +904,17 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
         if world.token_scopes.pop(token, None) is None:
             raise NotFound(f"token {token!r} not registered")
         return {"token": token, "scopes": None}
+
+    @app.post("/_sandbox/authz-codes")
+    async def mint_authz_code(client_id: str = Form(default="sandbox-client")) -> dict[str, Any]:
+        """Mint a single-use authorization code (60 s TTL, like the real flow)
+        for `grant_type=authorization_code` exchanges on /oauth/token."""
+        code = f"authz-{secrets.token_urlsafe(16)}"
+        world.authz_codes[code] = {
+            "client_id": client_id,
+            "expires_ms": now_ms() + 60_000,
+        }
+        return {"code": code, "expires_in": 60}
 
     @app.delete("/_sandbox/subscriptions/{subscription_id}")
     async def del_subscription(subscription_id: str) -> dict[str, Any]:

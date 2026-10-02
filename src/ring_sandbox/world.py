@@ -68,14 +68,15 @@ class HistoryRecord:
         # Real entries carry cv_detections + meta.riid — mirror the shape so
         # clients can rely on the keys existing. `sub_type` is omitted by the
         # real API when absent, not nulled.
+        # Recorded shape: attributes are exactly start/end/event_type/
+        # is_third_party_reviewed — the API withholds sub_type from history
+        # entirely (it's a filter-only field; clients must reconstruct it).
         attrs: dict[str, Any] = {
             "event_type": self.event_type,
             "is_third_party_reviewed": self.reviewed,
             "start": self.start,
             "end": self.end,
         }
-        if self.sub_type is not None:
-            attrs["sub_type"] = self.sub_type
         return {
             "type": "history-events",
             "id": self.id,
@@ -179,6 +180,11 @@ class SandboxDevice:
         if self.is_camera:
             attrs.setdefault("audio", {"snooze": {"active": None, "until": None}})
             attrs.setdefault("state", None)
+            # Cameras always report a last-seen timestamp on the real API.
+            attrs.setdefault(
+                "reported_at",
+                datetime.fromtimestamp(self.reported_at / 1000, tz=UTC).isoformat(),
+            )
         if self.kind == DeviceKind.CONTACT_SENSOR:
             attrs["contact_detection"] = {"faulted": self.faulted}
             attrs["tamper_detection"] = {"detected": self.tamper}
@@ -218,6 +224,22 @@ class SandboxDevice:
                 "motion_detection": {"configurations": ["enabled", "motion_zones"]},
                 "image_enhancements": {
                     "configurations": ["color_night_vision", "hdr", "privacy_zones", "snapshot"]
+                },
+                # The real camera payload carries these keys nulled, not absent —
+                # clients distinguish "unsupported" (null) from "unknown" (missing).
+                **{
+                    k: None
+                    for k in (
+                        "audio",
+                        "flood_detection",
+                        "tamper_detection",
+                        "glass_break_detection",
+                        "smoke_detection",
+                        "freeze_detection",
+                        "co_detection_listener",
+                        "battery_status",
+                        "contact_detection",
+                    )
                 },
             }
             if self.components:
@@ -379,8 +401,17 @@ class World:
     media_dir: Path | None = None
     delivered: list[dict[str, Any]] = field(default_factory=list)
     app_integration_status: str | None = None
+    # ms epoch at which the user consented (app-integration completed) — the
+    # real API exposes no history/media from before that instant. None = the
+    # consent flow never ran on this world (no boundary enforced).
+    consent_at: int | None = None
+    # authorization_code grant support: minted codes (60 s TTL) → client_id.
+    authz_codes: dict[str, dict[str, Any]] = field(default_factory=dict)
     subscriptions: dict[str, dict[str, Any]] = field(default_factory=dict)
     whep_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # steady-state rate-limit accounting (X-RateLimit-* headers, /v1 only)
+    _rl_window: int = 0
+    _rl_used: int = 0
 
     # ----------------------------------------------------------- token auth
 
@@ -482,6 +513,9 @@ class World:
             sub_type=sub_type,
             start=at_ms,
             end=at_ms + duration_ms,
+            # Motion recordings carry a Ring-internal recording id (meta.riid);
+            # on_demand/ding rows stay null like the real API.
+            riid=str(uuid.uuid4()) if hist_type == "motion" else None,
         )
         dev.history.append(rec)
         dev.history.sort(key=lambda r: r.start, reverse=True)
