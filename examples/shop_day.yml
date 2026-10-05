@@ -1,0 +1,73 @@
+# Custom scenario for `ring-sandbox play` / `attest replay`.
+#
+# One compressed day at a small neighbourhood shop, seen by two cameras in the
+# default world: "Front Door" watches customers come in, "Backyard" stands in
+# for the back-door loading lane. Useful for apps that count footfall and log
+# supplier deliveries:
+#   - staff arrive before opening and leave after closing
+#   - a morning rush and a denser lunch peak at the front door
+#   - three deliveries at the back (vehicle -> courier on foot -> vehicle):
+#     an on-time bread van, an on-time produce pickup, and a drinks lorry
+#     that turns up late, in the middle of the lunch peak
+#   - a cat in the back lane (motion with no sub_type) that is NOT a delivery
+#
+# Offsets are seconds from 06:45. Try:  ring-sandbox play shop_day --speed 600
+# Field reference: see late_arrival.yml / ring_sandbox.scenarios.Step.
+# Contributed by ShopSense (https://github.com/ZenBen5173/shopsense).
+
+name: shop_day
+description: >-
+  A small shop's day on two cameras: morning rush, lunch peak, and three
+  back-door deliveries (two on time, one late into the lunch peak).
+steps:
+  # 06:45 staff arrive (before opening)
+  - { offset_s: 0, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  # 07:10 bread van at the back
+  - { offset_s: 1500, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 30000 }
+  - { offset_s: 1680, type: motion_detected, sub_type: human, device: Backyard, duration_ms: 25000 }
+  - { offset_s: 1920, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 20000 }
+  # 07:30-09:00 morning rush: a customer every ~4 minutes
+  - { offset_s: 2700, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 18000 }
+  - { offset_s: 2940, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 22000 }
+  - { offset_s: 3180, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 15000 }
+  - { offset_s: 3360, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 30000 }
+  - { offset_s: 3600, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 18000 }
+  - { offset_s: 3900, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  - { offset_s: 4140, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 16000 }
+  - { offset_s: 4500, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 25000 }
+  - { offset_s: 5100, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 19000 }
+  - { offset_s: 5700, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 21000 }
+  # 11:05 produce pickup arrives on time
+  - { offset_s: 15600, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 30000 }
+  - { offset_s: 15900, type: motion_detected, sub_type: human, device: Backyard, duration_ms: 40000 }
+  - { offset_s: 16320, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 25000 }
+  # 12:00-14:00 lunch peak: a customer every ~2 minutes
+  - { offset_s: 18900, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  - { offset_s: 19020, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 24000 }
+  - { offset_s: 19140, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 18000 }
+  - { offset_s: 19260, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 30000 }
+  - { offset_s: 19380, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 22000 }
+  - { offset_s: 19500, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 26000 }
+  - { offset_s: 19620, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 19000 }
+  - { offset_s: 19740, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 21000 }
+  # 12:10 the drinks lorry, due 10:00-11:00, arrives late in the rush
+  - { offset_s: 19500, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 30000 }
+  - { offset_s: 19800, type: motion_detected, sub_type: human, device: Backyard, duration_ms: 45000 }
+  - { offset_s: 20400, type: motion_detected, sub_type: vehicle, device: Backyard, duration_ms: 25000 }
+  - { offset_s: 19980, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  - { offset_s: 20220, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 23000 }
+  - { offset_s: 20460, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 17000 }
+  - { offset_s: 20700, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 28000 }
+  - { offset_s: 21300, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  - { offset_s: 21900, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 22000 }
+  - { offset_s: 22500, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 18000 }
+  # 15:00 a cat in the back lane (not a delivery)
+  - { offset_s: 29700, type: motion_detected, device: Backyard, duration_ms: 8000 }
+  # 17:30-19:00 evening trickle
+  - { offset_s: 38700, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
+  - { offset_s: 39300, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 24000 }
+  - { offset_s: 39900, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 19000 }
+  - { offset_s: 40800, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 21000 }
+  - { offset_s: 42300, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 18000 }
+  # 22:10 staff leave
+  - { offset_s: 55500, type: motion_detected, sub_type: human, device: Front Door, duration_ms: 20000 }
