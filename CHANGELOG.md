@@ -3,6 +3,14 @@
 ## Unreleased
 
 ### Added
+## Unreleased
+
+### Added
+- Media *pools*: `media_dir/<device_id>/` and `media_dir/default/` may hold
+  several stills (or clips), and one is chosen per event timestamp. Single-file
+  layouts are unchanged and still take precedence over the shared default.
+  Selection is deterministic in the timestamp, so scenarios and fixtures replay
+  identically.
 
 - **Consent boundary** — completing the app-integration sets
   `World.consent_at`: earlier history rows are filtered out and pre-consent

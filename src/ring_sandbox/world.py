@@ -45,6 +45,36 @@ _HISTORY_TYPE = {
 }
 
 
+_IMAGE_EXTS = ("jpg", "jpeg", "png")
+
+
+def _mime_for(path: Path) -> str:
+    return "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+
+
+def _media_pool(directory: Path, exts: tuple[str, ...] = _IMAGE_EXTS) -> list[Path]:
+    """Files in ``directory`` usable as media, sorted for a stable order.
+
+    Returns an empty list when the directory is absent or holds nothing
+    usable, so callers can fall through to the single-file layout.
+    """
+    if not directory.is_dir():
+        return []
+    wanted = {f".{e.lower()}" for e in exts}
+    return sorted(p for p in directory.iterdir() if p.suffix.lower() in wanted and p.is_file())
+
+
+def _pool_index(ts_ms: int, size: int) -> int:
+    """Pick a pool slot for a timestamp.
+
+    CRC32 rather than ``ts_ms % size``: event timestamps cluster on round
+    intervals, and a bare modulo against a pool whose size shares a factor with
+    that interval hands back the same few files forever. Deterministic either
+    way, and CRC32 is stdlib, so this adds no dependency.
+    """
+    return zlib.crc32(str(ts_ms).encode()) % size
+
+
 def now_ms() -> int:
     return int(datetime.now(tz=UTC).timestamp() * 1000)
 
@@ -553,19 +583,50 @@ class World:
     # ------------------------------------------------------------- media
 
     def snapshot_bytes(self, device: SandboxDevice, ts_ms: int, fmt: str) -> tuple[bytes, str]:
-        """Return (content, mime). Uses ``media_dir/<device_id>.<ext>`` or ``default.<ext>``
-        when present, otherwise a generated placeholder PNG."""
-        if self.media_dir:
-            for ext in ("jpg", "jpeg", "png"):
-                for stem in (device.id, "default"):
-                    p = self.media_dir / f"{stem}.{ext}"
-                    if p.exists():
-                        return p.read_bytes(), "image/jpeg" if ext != "png" else "image/png"
-        return _placeholder_png(device, ts_ms), "image/png"
+        """Return (content, mime) for a still at ``ts_ms``.
 
-    def clip_bytes(self, device: SandboxDevice) -> bytes:
+        Resolution order, first match wins:
+
+        1. ``media_dir/<device_id>/`` — a *pool*; one file is chosen per
+           timestamp, so consecutive events look like different moments.
+        2. ``media_dir/<device_id>.<ext>`` — a single still for this device.
+        3. ``media_dir/default/`` — a pool shared by every device.
+        4. ``media_dir/default.<ext>`` — one still shared by every device.
+        5. A generated placeholder PNG.
+
+        Pools exist because the real API returns a different frame for every
+        event. With one file per device, anything that renders history — a
+        gallery, a wall, a timeline — shows the same picture repeated, which
+        makes a correct client look broken. Selection is deterministic in
+        ``ts_ms``: the same event always resolves to the same frame, so tests
+        and recorded scenarios stay reproducible.
+        """
         if self.media_dir:
             for stem in (device.id, "default"):
+                pool = _media_pool(self.media_dir / stem)
+                if pool:
+                    chosen = pool[_pool_index(ts_ms, len(pool))]
+                    return chosen.read_bytes(), _mime_for(chosen)
+
+                for ext in _IMAGE_EXTS:
+                    p = self.media_dir / f"{stem}.{ext}"
+                    if p.exists():
+                        return p.read_bytes(), _mime_for(p)
+        return _placeholder_png(device, ts_ms), "image/png"
+
+    def clip_bytes(self, device: SandboxDevice, ts_ms: int | None = None) -> bytes:
+        """Return clip bytes, honouring the same pool layout as snapshots.
+
+        ``ts_ms`` is optional so existing callers keep working; without it the
+        first file in a pool is used.
+        """
+        if self.media_dir:
+            for stem in (device.id, "default"):
+                pool = _media_pool(self.media_dir / stem, exts=("mp4",))
+                if pool:
+                    index = 0 if ts_ms is None else _pool_index(ts_ms, len(pool))
+                    return pool[index].read_bytes()
+
                 p = self.media_dir / f"{stem}.mp4"
                 if p.exists():
                     return p.read_bytes()

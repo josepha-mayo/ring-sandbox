@@ -67,6 +67,28 @@ Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, opt
 
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 
+### Media pools
+
+`--media-dir` accepts a single still per device, and also a *pool* per device:
+
+```
+media/
+  default.jpg                     one still, every device          (existing)
+  <device_id>.jpg                 one still, this device           (existing)
+  default/        a.jpg b.jpg …   pool shared by every device      (new)
+  <device_id>/    a.jpg b.jpg …   pool for this device             (new)
+```
+
+A pool is chosen over a single file, and a device's own media is chosen over
+the shared default. Within a pool the frame is picked from the event timestamp,
+so consecutive events look like different moments — which matters for anything
+rendering history, where one repeated picture makes a correct client look
+broken. Selection is deterministic: the same timestamp always resolves to the
+same frame, so scenarios and recorded fixtures replay identically.
+
+Clips follow the same layout with `.mp4` files.
+
+
 ### Record → replay
 
 Capture a real API surface once, replay it in CI forever:
