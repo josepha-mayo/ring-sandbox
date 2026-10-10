@@ -186,6 +186,19 @@ def test_webhook_signing_roundtrip():
         webhooks.parse(body, signing_key="wrong", signature=sig)
 
 
+def test_reregistering_a_webhook_url_updates_it_instead_of_adding_a_copy(
+    ring_control, ring_world: World
+):
+    hook, other = "http://127.0.0.1:9/hook", "http://127.0.0.1:9/other"
+    for key in ("old-key", "rotated-key"):
+        resp = ring_control.post("/_sandbox/webhooks", json={"url": hook, "signing_key": key})
+        resp.raise_for_status()
+    assert resp.json()["targets"] == [hook]
+    assert [(t.url, t.signing_key) for t in ring_world.webhooks] == [(hook, "rotated-key")]
+    resp = ring_control.post("/_sandbox/webhooks", json={"url": other, "signing_key": "k"})
+    assert resp.json()["targets"] == [hook, other]
+
+
 def test_inject_returns_v11_payload(ring_control):
     resp = ring_control.post(
         "/_sandbox/events", json={"type": "motion_detected", "sub_type": "package"}
