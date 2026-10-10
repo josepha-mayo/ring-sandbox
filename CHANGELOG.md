@@ -41,6 +41,8 @@
 
 - Image downloads logged the `on_demand` history row twice.
 - Video downloads accepted `duration <= 0`.
+- Registering a webhook URL that was already a target added a second target, so every
+  event was delivered twice; re-registering now updates the existing target's signing key.
 
 ## 0.5.0 — 2026-10-04
 

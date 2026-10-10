@@ -855,7 +855,14 @@ def create_app(world: World | None = None, chaos: Chaos | None = None) -> FastAP
 
     @app.post("/_sandbox/webhooks")
     async def add_webhook(body: WebhookTargetIn) -> dict[str, Any]:
-        world.webhooks.append(WebhookTarget(body.url, body.signing_key))
+        # Re-registering a URL updates that target (e.g. a rotated signing key) rather than
+        # adding a second one: re-running a setup script must not deliver every event twice.
+        for target in world.webhooks:
+            if target.url == body.url:
+                target.signing_key = body.signing_key
+                break
+        else:
+            world.webhooks.append(WebhookTarget(body.url, body.signing_key))
         return {"targets": [t.url for t in world.webhooks]}
 
     @app.delete("/_sandbox/webhooks")
