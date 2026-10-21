@@ -1,0 +1,118 @@
+# Custom scenario for `ring-sandbox play` / `attest replay`.
+#
+# One week of an older person who lives alone, seen only at the front of the
+# house: the doorbell ("Front Door"), its contact sensor ("Front Door Sensor")
+# and the garden camera ("Backyard"). The built-in scenarios cover single
+# visits; this one is for apps that learn a household's routine over several
+# days and flag slow change against it:
+#   - days 1-3 are the baseline: she steps out for the paper around 07:15,
+#     goes to the shops mid-morning, is in the garden after lunch and takes
+#     an afternoon walk
+#   - days 4-7 drift: each first door opening comes later (07:55 -> 08:55),
+#     the afternoon walk stops and the morning trip gets shorter
+#   - day 6 is a quiet morning: nothing at all until 12:35 and no trip out,
+#     so a "no morning activity" check should fire, then clear when she
+#     appears
+# A trip out is door open -> close -> doorbell motion; coming home is
+# doorbell motion -> door open -> close.
+#
+# Offsets are seconds from 00:00 on day 1 (86400 per day). `play` puts the
+# last step just before now, so wall-clock times shift with the run; pass
+# `start=` to `ring_sandbox.scenarios.run()` to pin day 1 to a real midnight.
+# Try:  ring-sandbox play week_routine_drift --backdate
+#   or  ring-sandbox play week_routine_drift --speed 3600   (about 2.6 minutes)
+# Field reference: see late_arrival.yml / ring_sandbox.scenarios.Step.
+# Contributed by Jirani (https://github.com/youneedgreg/Jirani), whose test
+# data comes from ring-routine-sim (https://github.com/youneedgreg/ring-routine-sim),
+# a generator for multi-week routines like this one.
+
+name: week_routine_drift
+description: >-
+  A week of one person's routine at the front door: three baseline days, then
+  later mornings, fewer trips out and one quiet morning.
+steps:
+  # Day 1: baseline
+  - { offset_s: 25800, type: contact_sensor_faulted, device: Front Door Sensor }  # D1 07:10
+  - { offset_s: 25810, type: motion_detected, sub_type: human, device: Front Door }  # D1 07:10
+  - { offset_s: 25845, type: contact_sensor_cleared, device: Front Door Sensor }  # D1 07:10
+  - { offset_s: 35700, type: contact_sensor_faulted, device: Front Door Sensor }  # D1 09:55
+  - { offset_s: 35712, type: contact_sensor_cleared, device: Front Door Sensor }  # D1 09:55
+  - { offset_s: 35720, type: motion_detected, sub_type: human, device: Front Door }  # D1 09:55
+  - { offset_s: 40800, type: motion_detected, sub_type: human, device: Front Door }  # D1 11:20
+  - { offset_s: 40825, type: contact_sensor_faulted, device: Front Door Sensor }  # D1 11:20
+  - { offset_s: 40837, type: contact_sensor_cleared, device: Front Door Sensor }  # D1 11:20
+  - { offset_s: 50700, type: motion_detected, sub_type: human, device: Backyard }  # D1 14:05
+  - { offset_s: 55800, type: contact_sensor_faulted, device: Front Door Sensor }  # D1 15:30
+  - { offset_s: 55812, type: contact_sensor_cleared, device: Front Door Sensor }  # D1 15:30
+  - { offset_s: 55820, type: motion_detected, sub_type: human, device: Front Door }  # D1 15:30
+  - { offset_s: 59700, type: motion_detected, sub_type: human, device: Front Door }  # D1 16:35
+  - { offset_s: 59725, type: contact_sensor_faulted, device: Front Door Sensor }  # D1 16:35
+  - { offset_s: 59737, type: contact_sensor_cleared, device: Front Door Sensor }  # D1 16:35
+  # Day 2: baseline
+  - { offset_s: 112500, type: contact_sensor_faulted, device: Front Door Sensor }  # D2 07:15
+  - { offset_s: 112510, type: motion_detected, sub_type: human, device: Front Door }  # D2 07:15
+  - { offset_s: 112545, type: contact_sensor_cleared, device: Front Door Sensor }  # D2 07:15
+  - { offset_s: 122700, type: contact_sensor_faulted, device: Front Door Sensor }  # D2 10:05
+  - { offset_s: 122712, type: contact_sensor_cleared, device: Front Door Sensor }  # D2 10:05
+  - { offset_s: 122720, type: motion_detected, sub_type: human, device: Front Door }  # D2 10:05
+  - { offset_s: 128100, type: motion_detected, sub_type: human, device: Front Door }  # D2 11:35
+  - { offset_s: 128125, type: contact_sensor_faulted, device: Front Door Sensor }  # D2 11:35
+  - { offset_s: 128137, type: contact_sensor_cleared, device: Front Door Sensor }  # D2 11:35
+  - { offset_s: 138000, type: motion_detected, sub_type: human, device: Backyard }  # D2 14:20
+  - { offset_s: 142800, type: contact_sensor_faulted, device: Front Door Sensor }  # D2 15:40
+  - { offset_s: 142812, type: contact_sensor_cleared, device: Front Door Sensor }  # D2 15:40
+  - { offset_s: 142820, type: motion_detected, sub_type: human, device: Front Door }  # D2 15:40
+  - { offset_s: 145800, type: motion_detected, sub_type: human, device: Front Door }  # D2 16:30
+  - { offset_s: 145825, type: contact_sensor_faulted, device: Front Door Sensor }  # D2 16:30
+  - { offset_s: 145837, type: contact_sensor_cleared, device: Front Door Sensor }  # D2 16:30
+  # Day 3: baseline
+  - { offset_s: 199200, type: contact_sensor_faulted, device: Front Door Sensor }  # D3 07:20
+  - { offset_s: 199210, type: motion_detected, sub_type: human, device: Front Door }  # D3 07:20
+  - { offset_s: 199245, type: contact_sensor_cleared, device: Front Door Sensor }  # D3 07:20
+  - { offset_s: 208800, type: contact_sensor_faulted, device: Front Door Sensor }  # D3 10:00
+  - { offset_s: 208812, type: contact_sensor_cleared, device: Front Door Sensor }  # D3 10:00
+  - { offset_s: 208820, type: motion_detected, sub_type: human, device: Front Door }  # D3 10:00
+  - { offset_s: 213900, type: motion_detected, sub_type: human, device: Front Door }  # D3 11:25
+  - { offset_s: 213925, type: contact_sensor_faulted, device: Front Door Sensor }  # D3 11:25
+  - { offset_s: 213937, type: contact_sensor_cleared, device: Front Door Sensor }  # D3 11:25
+  - { offset_s: 222900, type: motion_detected, sub_type: human, device: Backyard }  # D3 13:55
+  - { offset_s: 228900, type: contact_sensor_faulted, device: Front Door Sensor }  # D3 15:35
+  - { offset_s: 228912, type: contact_sensor_cleared, device: Front Door Sensor }  # D3 15:35
+  - { offset_s: 228920, type: motion_detected, sub_type: human, device: Front Door }  # D3 15:35
+  - { offset_s: 232800, type: motion_detected, sub_type: human, device: Front Door }  # D3 16:40
+  - { offset_s: 232825, type: contact_sensor_faulted, device: Front Door Sensor }  # D3 16:40
+  - { offset_s: 232837, type: contact_sensor_cleared, device: Front Door Sensor }  # D3 16:40
+  # Day 4: drift: later start, the afternoon walk is gone
+  - { offset_s: 287700, type: contact_sensor_faulted, device: Front Door Sensor }  # D4 07:55
+  - { offset_s: 287710, type: motion_detected, sub_type: human, device: Front Door }  # D4 07:55
+  - { offset_s: 287745, type: contact_sensor_cleared, device: Front Door Sensor }  # D4 07:55
+  - { offset_s: 297600, type: contact_sensor_faulted, device: Front Door Sensor }  # D4 10:40
+  - { offset_s: 297612, type: contact_sensor_cleared, device: Front Door Sensor }  # D4 10:40
+  - { offset_s: 297620, type: motion_detected, sub_type: human, device: Front Door }  # D4 10:40
+  - { offset_s: 301800, type: motion_detected, sub_type: human, device: Front Door }  # D4 11:50
+  - { offset_s: 301825, type: contact_sensor_faulted, device: Front Door Sensor }  # D4 11:50
+  - { offset_s: 301837, type: contact_sensor_cleared, device: Front Door Sensor }  # D4 11:50
+  # Day 5: drift: later still, a shorter trip out
+  - { offset_s: 375900, type: contact_sensor_faulted, device: Front Door Sensor }  # D5 08:25
+  - { offset_s: 375910, type: motion_detected, sub_type: human, device: Front Door }  # D5 08:25
+  - { offset_s: 375945, type: contact_sensor_cleared, device: Front Door Sensor }  # D5 08:25
+  - { offset_s: 385800, type: contact_sensor_faulted, device: Front Door Sensor }  # D5 11:10
+  - { offset_s: 385812, type: contact_sensor_cleared, device: Front Door Sensor }  # D5 11:10
+  - { offset_s: 385820, type: motion_detected, sub_type: human, device: Front Door }  # D5 11:10
+  - { offset_s: 387900, type: motion_detected, sub_type: human, device: Front Door }  # D5 11:45
+  - { offset_s: 387925, type: contact_sensor_faulted, device: Front Door Sensor }  # D5 11:45
+  - { offset_s: 387937, type: contact_sensor_cleared, device: Front Door Sensor }  # D5 11:45
+  # Day 6: quiet morning: nothing at all until 12:35, no trip out
+  - { offset_s: 477300, type: contact_sensor_faulted, device: Front Door Sensor }  # D6 12:35
+  - { offset_s: 477310, type: motion_detected, sub_type: human, device: Front Door }  # D6 12:35
+  - { offset_s: 477345, type: contact_sensor_cleared, device: Front Door Sensor }  # D6 12:35
+  # Day 7: drift: latest start of the week, one short trip
+  - { offset_s: 550500, type: contact_sensor_faulted, device: Front Door Sensor }  # D7 08:55
+  - { offset_s: 550510, type: motion_detected, sub_type: human, device: Front Door }  # D7 08:55
+  - { offset_s: 550545, type: contact_sensor_cleared, device: Front Door Sensor }  # D7 08:55
+  - { offset_s: 559800, type: contact_sensor_faulted, device: Front Door Sensor }  # D7 11:30
+  - { offset_s: 559812, type: contact_sensor_cleared, device: Front Door Sensor }  # D7 11:30
+  - { offset_s: 559820, type: motion_detected, sub_type: human, device: Front Door }  # D7 11:30
+  - { offset_s: 561900, type: motion_detected, sub_type: human, device: Front Door }  # D7 12:05
+  - { offset_s: 561925, type: contact_sensor_faulted, device: Front Door Sensor }  # D7 12:05
+  - { offset_s: 561937, type: contact_sensor_cleared, device: Front Door Sensor }  # D7 12:05

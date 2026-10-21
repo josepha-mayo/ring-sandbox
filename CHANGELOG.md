@@ -25,6 +25,10 @@
 - JSON:API `errors[]` envelope for request-validation failures; camera
   capability null-keys + `reported_at` parity; `component_id` accepted on
   configurations; `meta.riid` on generated motion records.
+- **`week_routine_drift` example** — seven days of one person's front-door
+  routine (doorbell, contact sensor, garden camera): three baseline days,
+  then later first door openings, fewer trips out and one quiet morning,
+  for testing routine-learning and absence checks across days.
 
 ### Changed
 
