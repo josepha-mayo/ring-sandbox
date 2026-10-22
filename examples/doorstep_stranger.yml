@@ -1,0 +1,35 @@
+# Custom scenario for `ring-sandbox play`.
+#
+# Elder care: an unknown visitor with no vehicle and no package rings
+# repeatedly, the resident opens the door and talks for five minutes, and the
+# visitor leaves. Unlike `visitor_not_worker` (a courier) nothing is delivered,
+# which is the pattern of a doorstep scam aimed at older people living alone.
+# Useful for exercising visitor descriptions and "unknown visitor" warnings.
+# Field reference (see ring_sandbox.scenarios.Step):
+#   offset_s    seconds after the scenario's simulated start
+#   type        webhook event type: motion_detected | button_press |
+#               contact_sensor_faulted | contact_sensor_cleared |
+#               device_offline | device_online
+#   sub_type    motion hint: human | vehicle | package (optional)
+#   device      device id or name; omit for the default doorbell (optional)
+#   duration_ms event duration in milliseconds (optional)
+
+name: doorstep_stranger
+description: Unknown visitor, no package or vehicle, rings repeatedly and is let in to talk.
+steps:
+  - offset_s: 0       # a stranger walks up on foot
+    type: motion_detected
+    sub_type: human
+  - offset_s: 10
+    type: button_press
+  - offset_s: 70      # rings again a minute later
+    type: button_press
+  - offset_s: 80      # resident opens the door
+    type: contact_sensor_faulted
+    device: Front Door Sensor
+  - offset_s: 380     # five minutes of talking, door closes
+    type: contact_sensor_cleared
+    device: Front Door Sensor
+  - offset_s: 390     # the visitor walks away
+    type: motion_detected
+    sub_type: human

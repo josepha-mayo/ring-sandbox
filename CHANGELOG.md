@@ -25,6 +25,10 @@
 - JSON:API `errors[]` envelope for request-validation failures; camera
   capability null-keys + `reported_at` parity; `component_id` accepted on
   configurations; `meta.riid` on generated motion records.
+- **Elder-care example scenarios** — `night_wandering`, `unanswered_door`
+  and `doorstep_stranger` ship in `examples/` for caretaking integrations
+  (night-time door alerts, inactivity / unanswered-ding checks, doorstep-scam
+  warnings); they play on the default world.
 
 ### Changed
 

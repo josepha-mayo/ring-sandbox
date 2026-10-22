@@ -1,0 +1,37 @@
+# Custom scenario for `ring-sandbox play`.
+#
+# Elder care: a resident living alone collects the morning milk (door cycle +
+# doorstep motion), then the house goes quiet. Five hours later a caregiver
+# rings twice, waits, and leaves; the door never opens. Useful for exercising
+# wellness checks: "last seen" times, inactivity alerts, and an unanswered ding.
+# Field reference (see ring_sandbox.scenarios.Step):
+#   offset_s    seconds after the scenario's simulated start
+#   type        webhook event type: motion_detected | button_press |
+#               contact_sensor_faulted | contact_sensor_cleared |
+#               device_offline | device_online
+#   sub_type    motion hint: human | vehicle | package (optional)
+#   device      device id or name; omit for the default doorbell (optional)
+#   duration_ms event duration in milliseconds (optional)
+
+name: unanswered_door
+description: Resident seen once in the morning, then silence; a caregiver's two rings go unanswered.
+steps:
+  - offset_s: 0       # resident opens the door for the milk
+    type: contact_sensor_faulted
+    device: Front Door Sensor
+  - offset_s: 5
+    type: motion_detected
+    sub_type: human
+  - offset_s: 40
+    type: contact_sensor_cleared
+    device: Front Door Sensor
+  - offset_s: 18000   # 5 h of silence, then a caregiver walks up
+    type: motion_detected
+    sub_type: human
+  - offset_s: 18010
+    type: button_press
+  - offset_s: 18130   # rings again after two minutes
+    type: button_press
+  - offset_s: 18300   # gives up and leaves; the door never opened
+    type: motion_detected
+    sub_type: human

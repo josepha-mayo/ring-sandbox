@@ -65,6 +65,22 @@ ring-sandbox inject --type motion_detected --sub-type human
 
 Custom scenarios are plain YAML — `steps` entries take `offset_s`, `type`, optional `sub_type`, `device` (id or name), and `duration_ms`. Three documented examples ship **inside the wheel** (also in `examples/`): `late_arrival` (aide shows 25 min late), `partial_blackout` (camera dies mid-visit — departure unobserved), `visitor_not_worker` (courier activity in the aide's window). `ring_sandbox.scenarios.resolve()` tries built-ins, then shipped examples, then file paths.
 
+#### Elder-care scenarios
+
+Caretaking apps watch for what an older person living alone did, or didn't, do. Three shipped examples cover common checks and play on the default world (doorbell + Front Door Sensor):
+
+| Scenario | What happens | Exercises |
+|---|---|---|
+| `night_wandering` | Front door opens 2 h 10 min into an overnight window, resident outside 12 min | night-time door alerts |
+| `unanswered_door` | Resident collects the milk, 5 h of silence, a caregiver rings twice and leaves | "last seen", inactivity, unanswered ding |
+| `doorstep_stranger` | Visitor on foot, no package or vehicle, rings twice, door open 5 min | unknown-visitor / doorstep-scam warnings |
+
+```bash
+ring-sandbox play night_wandering --backdate
+ring-sandbox play unanswered_door --speed 600     # 5 h of silence in ~30 s
+ring-sandbox play doorstep_stranger --speed 10
+```
+
 Interactive docs at `http://127.0.0.1:8787/_sandbox/docs`. Drop real `default.jpg` / `default.mp4` (or `<device_id>.jpg`) in a folder and pass `--media-dir` to serve real media instead of placeholders.
 
 ### Record → replay

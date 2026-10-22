@@ -1,0 +1,30 @@
+# Custom scenario for `ring-sandbox play`.
+#
+# Elder care: an overnight window in which the front door opens 2 h 10 min in
+# (02:10 when the window starts at midnight), the resident is seen on the
+# doorstep, and the door stays open for 12 minutes before they come back in. Useful for exercising
+# night-time door alerts for people who live alone or have dementia.
+# Field reference (see ring_sandbox.scenarios.Step):
+#   offset_s    seconds after the scenario's simulated start
+#   type        webhook event type: motion_detected | button_press |
+#               contact_sensor_faulted | contact_sensor_cleared |
+#               device_offline | device_online
+#   sub_type    motion hint: human | vehicle | package (optional)
+#   device      device id or name; omit for the default doorbell (optional)
+#   duration_ms event duration in milliseconds (optional)
+
+name: night_wandering
+description: Front door opens at 02:10 in an overnight window; resident outside for 12 minutes.
+steps:
+  - offset_s: 7800    # 02:10 the door opens
+    type: contact_sensor_faulted
+    device: Front Door Sensor
+  - offset_s: 7805    # resident steps out onto the doorstep
+    type: motion_detected
+    sub_type: human
+  - offset_s: 8510    # 02:21 back at the door
+    type: motion_detected
+    sub_type: human
+  - offset_s: 8520    # 02:22 door closes again
+    type: contact_sensor_cleared
+    device: Front Door Sensor
