@@ -266,6 +266,9 @@ class HistoryEventType(StrEnum):
 
 class HistoryEventAttributes(_Model):
     event_type: str
+    # Withheld by the API on history resources (filter-only), so always None here;
+    # declared so `ev.attributes.sub_type` reads as None instead of raising.
+    sub_type: str | None = None
     is_third_party_reviewed: bool | None = None
     start: int
     end: int | None = None

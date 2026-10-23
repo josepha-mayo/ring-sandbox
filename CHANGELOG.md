@@ -26,6 +26,10 @@
   capability null-keys + `reported_at` parity; `component_id` accepted on
   configurations; `meta.riid` on generated motion records.
 
+- **Step metadata** — scenario steps accept a `meta:` mapping and any
+  `x-`-prefixed key (collected into `Step.meta`), so apps can annotate their
+  own scenario files and still replay them with `ring-sandbox play`.
+
 ### Changed
 
 - `latest_in_range` image requests now 416 when no recording covers the
@@ -40,6 +44,10 @@
 ### Fixed
 
 - Image downloads logged the `on_demand` history row twice.
+- `HistoryEventAttributes.sub_type` is declared (always `None`, since history
+  withholds it), so `ev.attributes.sub_type` no longer raises `AttributeError`.
+- Scenario steps with an unknown key now name the key and the step index
+  instead of surfacing a raw dataclass `TypeError`.
 - Video downloads accepted `duration <= 0`.
 
 ## 0.5.0 — 2026-10-04

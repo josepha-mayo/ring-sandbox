@@ -157,6 +157,36 @@ def test_load_yaml_rejects_malformed_files_with_clear_errors(tmp_path):
         resolve(str(bad_step))
 
 
+def test_steps_carry_app_metadata_and_name_unknown_keys(tmp_path):
+    from ring_sandbox.scenarios import resolve
+
+    path = tmp_path / "meta.yml"
+    path.write_text(
+        "name: meta\n"
+        "myapp: {speed: 60}\n"
+        "steps:\n"
+        "  - offset_s: 0\n"
+        "    meta: {label: left home}\n"
+        "  - offset_s: 5\n"
+        "    type: button_press\n"
+        "    x-label: visitor\n",
+        encoding="utf-8",
+    )
+    first, second = resolve(str(path)).steps
+    assert first.meta == {"label": "left home"} and first.type == "motion_detected"
+    assert second.meta == {"x-label": "visitor"} and second.type == "button_press"
+
+    typo = tmp_path / "typo.yml"
+    typo.write_text("name: x\nsteps:\n  - offset_s: 0\n    subtype: human\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"bad step #0 .*unknown key\(s\) subtype"):
+        resolve(str(typo))
+
+    bad_meta = tmp_path / "bad_meta.yml"
+    bad_meta.write_text("name: x\nsteps:\n  - offset_s: 0\n    meta: oops\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="'meta' must be a mapping"):
+        resolve(str(bad_meta))
+
+
 def test_resolve_loads_yaml_paths(tmp_path):
     from ring_sandbox.scenarios import resolve
 

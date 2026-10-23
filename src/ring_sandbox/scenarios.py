@@ -13,7 +13,7 @@ media endpoints reject future timestamps). ``speed`` only controls pacing: ``spe
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,6 +27,7 @@ class Step:
     sub_type: str | None = None
     device: str | None = None  # device name or id; None = first camera
     duration_ms: int = 20_000
+    meta: dict[str, Any] = field(default_factory=dict)  # app data; never sent to the emulator
 
 
 @dataclass
@@ -106,11 +107,33 @@ def _parse_scenario(raw: Any, source: str) -> Scenario:
         raise ValueError(f"{source}: expected a mapping with 'name' and 'steps'")
     if "name" not in raw:
         raise ValueError(f"{source}: missing required 'name'")
-    try:
-        steps = [Step(**s) for s in raw.get("steps", [])]
-    except TypeError as exc:
-        raise ValueError(f"{source}: bad step — {exc}") from exc
+    steps = [_parse_step(s, source, i) for i, s in enumerate(raw.get("steps", []))]
     return Scenario(raw["name"], raw.get("description", ""), steps)
+
+
+_STEP_FIELDS = {f.name for f in fields(Step)}
+
+
+def _parse_step(raw: Any, source: str, index: int) -> Step:
+    """Build a Step; ``x-`` keys are app extensions and land in ``meta``."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"{source}: bad step #{index} — expected a mapping")
+    known = {k: v for k, v in raw.items() if k in _STEP_FIELDS}
+    extensions = {k: v for k, v in raw.items() if isinstance(k, str) and k.startswith("x-")}
+    unknown = sorted(str(k) for k in raw.keys() - known.keys() - extensions.keys())
+    if unknown:
+        raise ValueError(
+            f"{source}: bad step #{index} — unknown key(s) {', '.join(unknown)}; "
+            "put app-specific data under 'meta:' or prefix it with 'x-'"
+        )
+    if "meta" in known and not isinstance(known["meta"], dict):
+        raise ValueError(f"{source}: bad step #{index} — 'meta' must be a mapping")
+    try:
+        step = Step(**known)
+    except TypeError as exc:
+        raise ValueError(f"{source}: bad step #{index} — {exc}") from exc
+    step.meta = {**step.meta, **extensions}
+    return step
 
 
 def load_yaml(path: str) -> Scenario:

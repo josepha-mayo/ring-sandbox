@@ -153,6 +153,8 @@ def test_snapshot_and_clip(ring_client: RingClient, ring_control, ring_world: Wo
     # API it writes a fresh on_demand history entry for the media request itself
     history = list(ring_client.events(cam.id))
     assert history[0].attributes.event_type == "on_demand"
+    # sub_type is withheld on history resources; the model still exposes it as None
+    assert all(e.attributes.sub_type is None for e in history)
     motion = next(e for e in history if e.attributes.event_type == "motion")
     assert motion.attributes.is_third_party_reviewed is True
 
